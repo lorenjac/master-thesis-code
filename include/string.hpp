@@ -3,6 +3,7 @@
 
 #include <stdexcept> // std::out_of_range
 #include <ostream>   // std::ostream
+#include <iostream>  // std::cout, ...
 #include <cstddef>   // std::size_t
 #include <utility>   // std::swap
 #include <string>    // std::string
@@ -16,10 +17,11 @@ namespace util {
 
 namespace pmdk = pmem::obj;
 
-// TODO turn into class
-// TODO terminate string with null-byte
-// TODO add more functions from std::string
-// TODO consider introducing a capacity to avoid needless allocations
+// TODO string: improve API
+// * turn into class
+// * terminate string with null-byte
+// * add more functions from std::string
+// * consider introducing a capacity to avoid needless allocations
 struct string
 {
 // ############################################################################
@@ -127,14 +129,14 @@ struct string
         return data[pos];
     }
 
-    bool empty() const { return size.get_ro(); }
+    bool empty() const { return size.get_ro() == 0; }
 
     std::string to_std_string() const
     {
         if (empty())
             return {};
 
-        std::string(data.get(), size.get_ro());
+        return std::string(data.get(), size.get_ro());
     }
 
 // ############################################################################
@@ -165,16 +167,7 @@ struct string
     }
 };
 
-std::ostream& operator<<(std::ostream& os, const string& str)
-{
-    const auto size = str.size.get_ro();
-    os << "persistent_string [size=" << size;
-    os << ", data={";
-    for (string::size_type i=0; i<size; ++i)
-        os << str.data[i];
-    os << "}]";
-    return os;
-}
+std::ostream& operator<<(std::ostream& os, const string& str);
 
 } // end namespace util
 

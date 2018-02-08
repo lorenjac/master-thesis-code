@@ -40,7 +40,7 @@ public:
     using hash_type = Hash;
     using mapped_type = T;
     using size_type = std::size_t;
-    using this_type = hashmap<hash_type, mapped_type>;
+    using this_type = hashmap<Hash, T, Config>;
 
     // Keys of this type are only used for queries but are never stored.
     // When storing keys, volatile keys are copied into persistent keys.
@@ -383,8 +383,8 @@ public:
         }
     };
 
-    iterator begin() { return iterator{*this, 0}; }
-    iterator end() { return iterator{*this, mBucketCount.get_ro()}; }
+    iterator begin() { return iterator(*this, 0); }
+    iterator end() { return iterator(*this, mBucketCount.get_ro()); }
 
 // ############################################################################
 // PRIVATE API

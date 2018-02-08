@@ -3,106 +3,52 @@
 
 #include <cstddef>
 #include <string>
+#include <mutex>
 
 #include <libpmemobj++/pool.hpp>
 
 #include <libcuckoo/cuckoohash_map.hh>
 
-#include "hashmap.h"
-#include "string.h"
+#include "types.hpp"
+#include "index_config.hpp"
+#include "history.hpp"
+#include "tx.hpp"
 
 namespace midas {
 
 namespace pmdk = pmem::obj;
 
-class root_t {};
-
-class tx_t {
-    using ptr = std::shared_ptr<tx_t>;
-};
-
-// ############################################################################
-// Controls how volatile keys are mapped to persistent keys append ensures that
-// both key types produce the same hashes (required for rehashing)
-// ############################################################################
-
-class hasher {
-public:
-    using volatile_key_type = std::string;
-    using persistent_key_type = util::string;
-    using result_type = std::size_t;
-
-    static result_type hash(const volatile_key_type& key) {
-        return _hash(key.data(), key.size());
-    }
-
-    static result_type hash(const persistent_key_type& key) {
-        return _hash(key.data.get(), key.size);
-    }
-
-private:
-    static result_type _hash(const char* str, result_type size) {
-        // size_type hash = seed;
-        result_type hash = 0;
-        for (result_type i=0; i<size; ++i)
-        {
-            hash = hash * 101 + *str++;
-        }
-        return hash;
-    }
-};
-
-// ############################################################################
-// The type of the mapped values (arbitrary)
-// ############################################################################
-
-struct history {
-    using elem_type = pm::persistent_ptr<int>;
-
-    pm::p<util::list<elem_type>> chain;
-    bool lock;
-
-    history()
-        : chain{}
-        , lock{}
-    {}
-};
-
-using value_type = history;
-
-// ############################################################################
-// Several parameters that control the behaviour of the hashmap (optional)
-// ############################################################################
-
-struct index_config {
-    using size_type = util::hashmap_config::size_type;
-    using float_type = util::hashmap_config::float_type;
-
-    static constexpr size_type INIT_SIZE = 4;
-    static constexpr size_type GROW_FACTOR = 2;
-    static constexpr float_type MAX_LOAD_FACTOR = 0.75;
-};
-
-// ############################################################################
-// Store
-// ############################################################################
+struct root;
 
 class store
 {
 // ############################################################################
 // TYPES
 // ############################################################################
+
 public:
     using this_type = store;
     using key_type = std::string;
     using mapped_type = std::string;
-    using size_type = std::size_t;
 
-    using pool_type = pmdk::pool<root_t>;
-    using tx_table_type = cuckoohash_map<size_type, tx_t::ptr>;
-    using index_type = util::hashmap<hasher,
-                                     pmdk::persistent_ptr<history>,
-                                     index_config>;
+    using tx_table_type = cuckoohash_map<id_type, transaction::ptr>;
+    using index_type = util::hashmap<detail::index::hasher,
+                                     detail::history::ptr,
+                                     detail::index::config>;
+
+    struct root {
+        pmdk::persistent_ptr<index_type> index;
+    };
+    using pool_type = pmdk::pool<root>;
+
+    // Status codes of API calls
+    enum {
+        OK = 0,
+        INVALID_TX,
+        KEY_EXISTS,
+        WRITE_CONFLICT,
+        VALUE_NOT_FOUND = 404
+    };
 
 // ############################################################################
 // MEMBER VARIABLES
@@ -110,19 +56,42 @@ public:
 
 private:
     pool_type&      pop;
-    index_type*     map;
-    tx_table_type   txs;
+
+    // Index and its mutex
+    index_type*     index;
+    std::mutex      index_mutex;
+
+    // Transaction table
+    tx_table_type   tx_tab;
+
+    /**
+     * Logical clock for handing out timestamps.
+     *
+     * This timer is initialized with two and is always incremented by two.
+     * Therefore, timestamps are always even numbers. Transaction IDs on the
+     * other hand are odd. This way it is easy to tell both from another when
+     * inspecting begin/end fields of versions. We only need to test the LSB.
+     *
+     * Note: The zero timestamp is reserved for making versions invisible to
+     * everyone (e.g. when rolling back inserts), so it starts at 2.
+     */
+    std::atomic<stamp_type> next_ts{2};
+
+    /**
+     * Pool for unique transaction identifiers.
+     *
+     * Initialized with one and always incremented by two. Always yields odd
+     * numbers which can be easily differentiated from timestamps which are
+     * always even.
+     */
+    std::atomic<id_type> next_id{1};
 
 // ############################################################################
 // PUBLIC API
 // ############################################################################
 
 public:
-    store(pool_type& pop)
-        : pop{pop}
-        , map{}
-        , txs{}
-    {}
+    explicit store(pool_type& pop);
 
     // Copying is not allowed
     store(const this_type& other) = delete;
@@ -134,20 +103,24 @@ public:
 
     ~store() = default;
 
-    bool empty() const;
-    size_type size() const;
+    transaction::ptr begin();
+    int abort(transaction::ptr tx, int reason);
+    int commit(transaction::ptr tx);
 
-    tx_t::ptr begin();
-    int abort(tx_t::ptr);
-    int commit(tx_t::ptr);
-
-    int insert(tx_t& tx, const key_type& key, const value_type& value);
-    int get(tx_t& tx, const key_type& key, value_type& value);
-    int drop(tx_t& tx, const key_type& key);
+    int read(transaction::ptr tx, const key_type& key, mapped_type& result);
+    int write(transaction::ptr tx, const key_type& key, const mapped_type& value);
+    int drop(transaction::ptr tx, const key_type& key);
 
 // ############################################################################
 // PRIVATE API
 // ############################################################################
+
+private:
+    int _update(transaction::ptr tx, const key_type& key, const mapped_type& value, detail::history::ptr history);
+    int _insert(transaction::ptr tx, const key_type& key, const mapped_type& value);
+    void persist(transaction::ptr tx);
+    void rollback(transaction::ptr tx);
+    void init();
 };
 
 }

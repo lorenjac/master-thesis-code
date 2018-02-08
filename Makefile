@@ -5,7 +5,7 @@ CFLAGS=-std=c++1z -Wall -g
 
 # Input
 
-INCLUDE=-Iinclude -Ilib/pmdk/src/include
+INCLUDE=-Iinclude -Ilib/libcuckoo -Ilib/pmdk/src/include
 SRC_DIR=src
 
 LIB_DIR=-Llib/pmdk/src/debug/
@@ -20,10 +20,10 @@ BIN_DIR=bin
 
 # Targets
 
-# all : hashTest
-# 
-# hashTest : makeDir
-# 	$(CC) $(CFLAGS) $(INCLUDE) $(SRC_DIR)/$@.cpp $(LDFLAGS) -o $(BIN_DIR)/$@
+all : main
+
+main : makeDir
+	$(CC) $(CFLAGS) $(INCLUDE) $(SRC_DIR)/*.cpp $(LDFLAGS) -o $(BIN_DIR)/$@
 
 makeDir :
 	mkdir -p $(BIN_DIR)
