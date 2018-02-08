@@ -13,6 +13,17 @@ namespace app {
 using pool_type = midas::store::pool_type;
 using command = std::tuple<std::string, std::string, std::string>;
 
+void usage()
+{
+    std::cout << "Commands:\n";
+    std::cout << "  w KEY VALUE     Inserts or updates the specified pair\n";
+    std::cout << "  r KEY           Retrieves the value associated with they key (if any)\n";
+    std::cout << "  d KEY           Removes the pair with the given key (if any)\n";
+    std::cout << "\nNote: This is an early alpha and still very buggy\n";
+    std::cout << "\nKnown bugs:\n";
+    std::cout << "  * after deleting a pair, it cannot be inserted again\n";
+}
+
 void launch(pool_type& pop, const command& pack)
 {
     midas::store store{pop};
@@ -69,20 +80,15 @@ void launch(pool_type& pop, const command& pack)
         std::cout << "  cmd: " << cmd << '\n';
         std::cout << "  key: " << key << '\n';
         std::cout << "  val: " << value << '\n';
+        usage();
     }
 } // end function launch
 
 } // end namespace app
 
-
 int main(int argc, char* argv[])
 {
     using pool_type = midas::store::pool_type;
-
-    // if (argc < 2) {
-    //     std::cout << "error: too few arguments!\n";
-    //     return 0;
-    // }
 
     std::string file{"/tmp/nvm"};
     // std::string file{argv[1]};
@@ -93,6 +99,11 @@ int main(int argc, char* argv[])
         arg1 = argv[2];
     if (argc > 3)
         arg2 = argv[3];
+
+    if (cmd == "h" || cmd == "-h" || cmd == "help" || cmd == "-help") {
+        app::usage();
+        return 0;
+    }
 
     const std::string layout{"index"};
     const std::size_t pool_size = 64ULL * 1024 * 1024; // 64 MB
