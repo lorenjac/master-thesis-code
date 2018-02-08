@@ -8,19 +8,18 @@
 
 ## Build Setup
 
-1. In this folder, create directory `lib`
-2. Inside `lib` create soft links to your local copies of
-    * pmdk
-    * libcuckoo
-3. Build the pmdk libraries using `make` (do not install)
-
-Note: The Makefile requires the soft links to be named `pmdk` and `libcuckoo`.
+In this folder, create directory `lib`. Inside `lib` create soft links to your 
+local copies of **pmdk** and **libcuckoo**. The Makefile requires these names.
 
 ```
 mkdir lib
 ln -s <path to pmdk repository> lib/pmdk
 ln -s <path to libcuckoo repository> lib/libcuckoo
 ```
+ 
+In the end, build the **pmdk** libraries using `make`. Installing the binaries
+is not required. Instead the symlinks will be used to link against the **pmdk**
+statically.
 
 ## Build
 
