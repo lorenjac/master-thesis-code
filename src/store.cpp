@@ -150,7 +150,6 @@ int store::commit(transaction::ptr tx)
     tx->setEnd(next_ts.fetch_add(2));
 
     // Note: This is where validation would take place (not required for snapshot isolation)
-    // TODO commit(): add validation
 
     // Mark tx as committed.
     // This must be done atomically because operations of concurrent
@@ -180,125 +179,30 @@ int store::read(transaction::ptr tx, const key_type& key, mapped_type& result)
     if (!tx || tx->getStatus().load() != transaction::ACTIVE)
         return INVALID_TX;
 
-    // In order to prevent iterator invalidation by concurrent inserts or
-    // garbage collection we need to make sure that no one else can access
-    // the index.
-    index_mutex.lock();
-
     // Look up data item. Abort if key does not exist.
-    std::cout << "store::read(): looking up '" << key << "'" << std::endl;
+    // std::cout << "store::read(): looking up '" << key << "'" << std::endl;
+    index_mutex.lock();
     detail::history::ptr history;
-    if (!index->get(key, history)) {
-        std::cout << "store::read(): key '" << key << "' does not exist" << std::endl;
-        index_mutex.unlock();
+    auto status = index->get(key, history);
+    index_mutex.unlock();
+    if (!status) {
+        // std::cout << "store::read(): key '" << key << "' does not exist" << std::endl;
         return abort(tx, VALUE_NOT_FOUND);
     }
-
-    // Now that we retrieved the history, we can safely unlock the index again.
-    index_mutex.unlock();
-
-    // In orde to prevent concurrent modification, we need to
-    // make sure that no one else can access the history.
-    history->mutex.lock();
-
-    // Abort if no version of the queried data item exists
-    if (history->chain.empty())
-        return abort(tx, VALUE_NOT_FOUND);
 
     // Scan history for latest committed version which is older than tx.
-    // Search direction is reversed to find later items first.
-    detail::version::ptr candidate;
-    // for (auto it = history.versions().rbegin(); it != history.versions().rend(); ++it) {
-    // The current version
-    // auto v = *it;
-
-    // TODO read(): check if non-reversed for-loop is correct
-    // TODO read(): start scan with latest version
-    for (auto v : history->chain) {
-
-        // Read begin/end fields
-        // auto v_begin = v->begin.load();
-        // auto v_end = v->end.load();
-        auto v_begin = v->begin;
-        auto v_end = v->end.load();
-
-        // Check if begin-field contains a transaction id.
-        // If so, then V might still be dirty so we have to
-        // look up its associated transaction and determine whether
-        // (1) it committed and (2) whether that happened before tx started.
-        // In the absence of a tx id, V is clearly committed but we have to
-        // check if that happened before tx started.
-        if (is_tx_id(v_begin)) {
-            // If V was created by tx then it is visible to tx
-            if (v_begin == tx->getId()) {
-                candidate = v;
-                break;
-            }
-
-            // Lookup the specified transaction
-            // tx_table_mutex.lock();
-            transaction::ptr other_tx;
-            tx_tab.find(v_begin, other_tx);
-            // tx_table_mutex.unlock();
-
-            // V (written by other_tx) is only visible to tx if other_tx
-            // has committed before tx started.
-            if (other_tx->getStatus().load() != transaction::COMMITTED ||
-                    other_tx->getEnd() > tx->getBegin())
-                continue;
-        }
-        else {
-            // V is only visible to tx if it was committed before tx started.
-            if (v_begin >= tx->getBegin())
-                continue;
-        }
-
-        // Inspect end field
-        // If it contains a transaction id then we have to check that transaction.
-        // Otherwise we have to check if V was not invalidated before tx started.
-        if (is_tx_id(v_end)) {
-            // Lookup the specified transaction
-            // tx_table_mutex.lock();
-            transaction::ptr other_tx;
-            tx_tab.find(v_end, other_tx);
-            // tx_table_mutex.unlock();
-
-            // V (possibly invalidated by other_tx) is only visible to tx
-            // if other_tx is active, has aborted or has committed after
-            // tx started. If other_tx committed before tx then V was
-            // invalid before tx started and is thus invisible.
-            if (other_tx->getStatus().load() == transaction::COMMITTED &&
-                    other_tx->getEnd() < tx->getBegin())
-                continue;
-        }
-        else {
-            // V is only visible to tx if it is not been invalidated prior to tx.
-            //
-            // Note: This constraint is less restrictive than its counterpart
-            // in write(). Writing forbids any invalidation even if V is
-            // still valid when tx started.
-            if (v_end < tx->getBegin())
-                continue;
-        }
-
-        // If we reach this point all constraints were met so
-        // we found a potential candidate version.
-        candidate = v;
-        break;
-    }
-    // history.unlock();
+    history->mutex.lock();
+    auto candidate = getVersionR(history, tx);
     history->mutex.unlock();
 
     // If no candidate was found then no version is visible and tx must fail
     if (!candidate)
         return abort(tx, VALUE_NOT_FOUND);
 
-    // If we reach this point, we're good to go! :-)
-
-    std::cout << "store::read(): version found for key '" << key << "': {";
-    std::cout << "begin=" << candidate->begin;
-    std::cout << ", end=" << candidate->end;
-    std::cout << ", data=" << candidate->data << "}\n";
+    // std::cout << "store::read(): version found for key '" << key << "': {";
+    // std::cout << "begin=" << candidate->begin;
+    // std::cout << ", end=" << candidate->end;
+    // std::cout << ", data=" << candidate->data << "}\n";
 
     // Retrieve data from selected version
     result = candidate->data.to_std_string();
@@ -307,24 +211,18 @@ int store::read(transaction::ptr tx, const key_type& key, mapped_type& result)
 
 int store::write(transaction::ptr tx, const key_type& key, const mapped_type& value)
 {
-    std::cout << "store::write()" << std::endl;
-
     // Reject invalid or inactive transactions.
     if (!tx || tx->getStatus().load() != transaction::ACTIVE)
         return INVALID_TX;
-
-    // In order to prevent iterator invalidation by concurrent inserts or
-    // garbage collection we need to make sure that no one else can acceess
-    // the index.
-    index_mutex.lock();
 
     // TODO write(): make sure empty histories can be updated
     //  (A) remove history as soon as it becomes empty (neutral to update/insert)
     //  (B) keep empty histories and enable insertion with _insert() (spares heap ops)
 
     int status = OK;
-    std::cout << "store::write(): looking up '" << key << "'" << std::endl;
     detail::history::ptr history;
+
+    index_mutex.lock();
     if (index->get(key, history)) {
 
         // We no longer need the index so unlock it
@@ -332,7 +230,7 @@ int store::write(transaction::ptr tx, const key_type& key, const mapped_type& va
         status = _update(tx, key, value, history);
     }
     else {
-        std::cout << "store::write(): key '" << key << "' does not exist" << std::endl;
+        // std::cout << "store::write(): key '" << key << "' does not exist" << std::endl;
 
         // We still need the index for insertion so keep it locked
         status = _insert(tx, key, value);
@@ -343,131 +241,22 @@ int store::write(transaction::ptr tx, const key_type& key, const mapped_type& va
 
 int store::_update(transaction::ptr tx, const key_type& key, const mapped_type& value, detail::history::ptr history)
 {
-    std::cout << "store::_update()" << std::endl;
+    // std::cout << "store::_update()" << std::endl;
 
-    // In order to prevent concurrent modification, we need to make sure that
-    // no one else can access the history.
     history->mutex.lock();
-
-    // Abort if no version of the queried data item exists
-    if (history->chain.empty())
-        return abort(tx, VALUE_NOT_FOUND);
-
-    // The latest committed version suitable for writing
-    detail::version::ptr candidate;
-
-    // End timestamp of candidate version. We will need it later when
-    // determining whether another tx grabbed our candidate before us.
-    stamp_type v_end;
-
-    // Scan history for latest committed version which is older than tx.
-    // Search direction is reversed to find later items first.
-    // for (auto it = history.versions().rbegin(); it != history.versions().rend(); ++it) {
-    //     auto v = *it;
-
-    // TODO _update(): check if non-reversed for-loop is correct
-    for (auto v : history->chain) {
-
-        // Read begin/end fields
-        // auto v_begin = v->begin.load();
-        // v_end = v->end.load();
-        auto v_begin = v->begin;
-        v_end = v->end;
-
-        // Check if begin-field contains a transaction id.
-        // If so, then V might still be dirty so we have to
-        // look up its associated transaction and determine whether
-        // (1) it committed and (2) whether that happened before tx started.
-        // In the absence of a tx id, V is clearly committed but we have to
-        // check if that happened before tx started.
-        if (is_tx_id(v_begin)) {
-            // If V was created by tx then it is visible to tx
-            if (v_begin == tx->getId()) {
-                // Apply changes and return
-                v->data = value;
-                return OK;
-            }
-
-            // Lookup the specified transaction
-            // tx_table_mutex.lock();
-            transaction::ptr other_tx;
-            tx_tab.find(v_begin, other_tx);
-            // tx_table_mutex.unlock();
-
-            // V (written by other_tx) is only visible to tx if other_tx
-            // has committed before tx started.
-            //
-            // Note: This is the same assertion as is used for reading.
-            if (other_tx->getStatus().load() != transaction::COMMITTED ||
-                    other_tx->getEnd() > tx->getBegin())
-                continue;
-        }
-        else {
-            // V is only visible to tx if it was committed before tx started.
-            //
-            // Note: This is the same assertion as is used for reading.
-            if (v_begin >= tx->getBegin())
-                continue;
-        }
-
-        // Check if end-field contains a transaction id.
-        // If so, then V might be outdated so we have to look up
-        // its associated transaction and determine whether it aborted.
-        // If it aborted then there may be a newer version of V but that
-        // is invisible to tx as it was not committed. Hence V is visible to tx.
-        // If it did not abort then it is still committed or active which means
-        // that either V is now invalid or a write-write conflict would occur.
-        // In the absence of a tx id, V is clearly committed but may be outdated.
-        // In that case we have to check its timestamp for invalidation.
-        if (is_tx_id(v_end)) {
-            // Lookup the specified transaction
-            // tx_table_mutex.lock();
-            transaction::ptr other_tx;
-            tx_tab.find(v_end, other_tx);
-            // tx_table_mutex.unlock();
-
-            // V is only visible to tx if other_tx has aborted.
-            if (other_tx->getStatus().load() != transaction::FAILED)
-                continue;
-        }
-        else {
-            // V is only visible to tx if it is not been invalidated (no matter when).
-            //
-            // Note: This constraint is more restrictive than its
-            // counterpart in read(). Reading allows invalidation
-            // provided V was still valid when tx started.
-            if (v_end != INF)
-                continue;
-        }
-
-        // If we reach this point all constraints were met so
-        // we found a potential candidate version.
-        candidate = v;
-        break;
-    }
-    // history.unlock();
-    history->mutex.unlock();
-
-    // If no candidate was found then no version is visible and tx must fail
+    detail::version::ptr candidate = getVersionW(history, tx);
     if (!candidate)
         return abort(tx, VALUE_NOT_FOUND);
 
-    // Atomically set id of tx as end timestamp of version to be updated.
-    // If this CAS succeeds this transaction has exclusive write access
-    // to the candidate while all other contesters will fail. Likewise,
-    // if another transaction precedes tx then tx must fail. We compare
-    // with v_end because that is the timestamp/tid we saw during visibility
-    // check. If someone preceded us then v->end will be different now.
-    if (!candidate->end.compare_exchange_strong(v_end, tx->getId()))
-        return abort(tx, WRITE_CONFLICT);
-
-    // If we reach this point, we're good to go! :-)
+    if (candidate->begin == tx->getId()) {
+        candidate->data = value;
+        history->mutex.unlock();
+        return OK;
+    }
+    candidate->end.store(tx->getId());
+    history->mutex.unlock();
 
     // Create new version
-    // auto new_version = std::make_shared<version>();
-    // new_version->begin = tx->getId();
-    // new_version->data = data;
-    // new_version->end = INF;
     detail::version::ptr new_version;
     pmdk::transaction::exec_tx(pop, [&,this](){
         new_version = pmdk::make_persistent<detail::version>();
@@ -489,7 +278,7 @@ int store::_update(transaction::ptr tx, const key_type& key, const mapped_type& 
 
 int store::_insert(transaction::ptr tx, const key_type& key, const mapped_type& value)
 {
-    std::cout << "store::_insert()" << std::endl;
+    // std::cout << "store::_insert()" << std::endl;
 
     detail::version::ptr new_version;
     pmdk::transaction::exec_tx(pop, [&,this](){
@@ -499,10 +288,10 @@ int store::_insert(transaction::ptr tx, const key_type& key, const mapped_type& 
         new_version->data = value;
         new_version->end = INF;
 
-        std::cout << "store::_insert(): created new version {";
-        std::cout << "data=" << new_version->data;
-        std::cout << ", begin=" << new_version->begin;
-        std::cout << ", end=" << new_version->end << "}\n";
+        // std::cout << "store::_insert(): created new version {";
+        // std::cout << "data=" << new_version->data;
+        // std::cout << ", begin=" << new_version->begin;
+        // std::cout << ", end=" << new_version->end << "}\n";
 
         // Create new history with initial version and add it to the index.
         // We could do that lazily on commit but then write-write conlicts
@@ -525,142 +314,209 @@ int store::_insert(transaction::ptr tx, const key_type& key, const mapped_type& 
 
 int store::drop(transaction::ptr tx, const key_type& key)
 {
-    std::cout << "store::drop()" << std::endl;
+    // std::cout << "store::drop()" << std::endl;
 
     // Reject invalid or inactive transactions.
     if (!tx || tx->getStatus().load() != transaction::ACTIVE)
         return INVALID_TX;
 
-    // Look up data item. Abort if key does not exist.
-    pmdk::persistent_ptr<detail::history> history;
+    // Look up history of data item. Abort if key does not exist.
+    detail::history::ptr history;
     index_mutex.lock();
     auto status = index->get(key, history);
     index_mutex.unlock();
     if (!status)
         return abort(tx, VALUE_NOT_FOUND);
 
-    std::cout << "store::drop(): history exists" << std::endl;
-
     // In order to ensure a consistent view on the history, we need to
     // make sure that no one else can modify it.
     history->mutex.lock();
-
-    // Abort if no version of the queried data item exists
-    if (history->chain.empty())
-        return abort(tx, VALUE_NOT_FOUND);
-
-    std::cout << "store::drop(): history is non-empty" << std::endl;
-
-    // The latest committed version suitable for writing
-    detail::version::ptr candidate;
-
-    // End timestamp of candidate version. We will need this later when
-    // determining whether another tx grabbed our candidate before us.
-    stamp_type v_end;
-
-    // Scan history for latest committed version which is older than tx.
-    // Search direction is reversed to find later items first.
-    // for (auto it = history.versions().rbegin(); it != history.versions().rend(); ++it) {
-    //     auto v = *it;
-    // TODO drop(): check if non-reversed for-loop is correct
-    for (auto& v : history->chain) {
-
-        // atomically read begin/end fields
-        auto v_begin = v->begin;
-        v_end = v->end.load();
-
-        // Check if begin-field contains a transaction id.
-        // If so, then V might still be dirty so we have to
-        // look up its associated transaction and determine whether
-        // (1) it committed and (2) whether that happened before tx started.
-        // In the absence of a tx id, V is clearly committed but we have to
-        // check if that happened before tx started.
-        if (is_tx_id(v_begin)) {
-            // If V was created by tx then it is visible to tx
-            if (v_begin == tx->getId()) {
-                candidate = v;
-                break;
-            }
-
-            // Lookup the specified transaction
-            transaction::ptr other_tx;
-            tx_tab.find(v_begin, other_tx);
-
-            // V (written by other_tx) is only visible to tx if other_tx
-            // has committed before tx started.
-            //
-            // Note: This is the same assertion as is used for reading.
-            if (other_tx->getStatus().load() != transaction::COMMITTED ||
-                    other_tx->getEnd() > tx->getBegin())
-                continue;
-        }
-        else {
-            // V is only visible to tx if it was committed before tx started.
-            //
-            // Note: This is the same assertion as is used for reading.
-            if (v_begin >= tx->getBegin())
-                continue;
-        }
-
-        // Check if end-field contains a transaction id.
-        // If so, then V might be outdated so we have to look up
-        // its associated transaction and determine whether it aborted.
-        // If it aborted then there may be a newer version of V but that
-        // is invisible to tx as it was not committed. Hence V is visible to tx.
-        // If it did not abort then it is still committed or active which means
-        // that either V is now invalid or a write-write conflict would occur.
-        // In the absence of a tx id, V is clearly committed but may be outdated.
-        // In that case we have to check its timestamp for invalidation.
-        if (is_tx_id(v_end)) {
-            // Lookup the specified transaction
-            transaction::ptr other_tx;
-            tx_tab.find(v_end, other_tx);
-
-            // V is only visible to tx if other_tx has aborted.
-            if (other_tx->getStatus().load() != transaction::FAILED)
-                continue;
-        }
-        else {
-            // V is only visible to tx if it is not been invalidated (no matter when).
-            //
-            // Note: This constraint is more restrictive than its
-            // counterpart in read(). Reading allows invalidation
-            // provided V was still valid when tx started.
-            if (v_end != INF)
-                continue;
-        }
-
-        // If we reach this point all constraints were met so
-        // we found a potential candidate version.
-        candidate = v;
-        break;
-    }
-    history->mutex.unlock();
-
-    // If no candidate was found then no version is visible and tx must fail
+    auto candidate = getVersionW(history, tx);
     if (!candidate)
         return abort(tx, VALUE_NOT_FOUND);
 
-    std::cout << "store::drop(): version found" << std::endl;
+    if (candidate->begin == tx->getId()) {
+        // We want to remove a version that was created by the same tx earlier.
+        // Again, we cannot delete V right away. Instead we have to
+        //  * re-validate the previously invalidated version (defacto rollback)
+        //  * invalidate our version (defacto rollback)
+        //  * remove delta from write set
+        // Note, that we do not add V to our remove set because persist() would
+        // make it look like V was invalidated by this tx when in fact it has
+        // never existed outside this transaction.
+        //
+        // Note: currently, we are OK with letting persist() first validate and
+        // then invalidate V with commit timestamps of tx. So we do add V to
+        // the remove set. Still, we must re-validate V's predecessor (if any).
+        auto iter = tx->getWriteSet().begin();
+        auto end = tx->getWriteSet().end();
+        for (; iter != end; ++iter) {
+            auto [before, after] = *iter;
+            if (after == candidate) {
+                // after->begin = 0;
+                // after->end.store(0);
+                before->end.store(INF);
+                // tx->getWriteSet().erase(iter);
+                break;
+            }
+        }
+    }
 
-    // Atomically set id of tx as end timestamp of version to be updated.
-    // If this CAS succeeds then this transaction has exclusive write access
-    // to the candidate while all other contesters fail. Likewise, if another
-    // transaction precedes tx then tx fails. We compare with v_end because
-    // that is the timestamp/tid we saw during visibility check. If someone
-    // preceded us then v->end will be different now in which case we fail.
-    if (!candidate->end.compare_exchange_strong(v_end, tx->getId()))
-        return abort(tx, WRITE_CONFLICT);
+    // Tentatively invalidate V with our tx id
+    candidate->end.store(tx->getId());
+    history->mutex.unlock();
 
-    // Placing tx's id in the end field of the candidate version V was actually
-    // all we really had to do here. This invalidates V as soon as tx commits.
-    // We do not delete V because tx could still fail in which case we need to
-    // be able to rollback. Likewise, if V is the currently the only version in
-    // its history, then we cannot delete that history. This can be done on
-    // successful commit or later (e.g. GC). For now, we only add V to our
-    // remove set, so that we can rollback if need be.
     tx->getRemoveSet().emplace_back(key, candidate);
     return OK;
+}
+
+detail::version::ptr store::getVersionW(detail::history::ptr& history, transaction::ptr tx)
+{
+    for (auto& v : history->chain) {
+        if (isWritable(v, tx))
+            return v;
+    }
+    return nullptr;
+}
+
+detail::version::ptr store::getVersionR(detail::history::ptr& history, transaction::ptr tx)
+{
+    for (auto& v : history->chain) {
+        if (isReadable(v, tx))
+            return v;
+    }
+    return nullptr;
+}
+
+bool store::isReadable(detail::version::ptr& v, transaction::ptr tx)
+{
+    // Read begin/end fields
+    auto v_begin = v->begin;
+    auto v_end = v->end.load();
+
+    // Check if begin-field contains a transaction id.
+    // If so, then V might still be dirty so we have to
+    // look up its associated transaction and determine whether
+    // (1) it committed and (2) whether that happened before tx started.
+    // In the absence of a tx id, V is clearly committed but we have to
+    // check if that happened before tx started.
+    if (is_tx_id(v_begin)) {
+        // If V was created by tx then it is visible to tx
+        if (v_begin == tx->getId())
+            return true;
+
+        // Lookup the specified transaction
+        transaction::ptr other_tx;
+        tx_tab.find(v_begin, other_tx);
+
+        // V (written by other_tx) is only visible to tx if other_tx
+        // has committed before tx started.
+        if (other_tx->getStatus().load() != transaction::COMMITTED ||
+                other_tx->getEnd() > tx->getBegin())
+            return false;
+    }
+    else {
+        // V is only visible to tx if it was committed before tx started.
+        if (v_begin >= tx->getBegin())
+            return false;
+    }
+
+    // Inspect end field
+    // If it contains a transaction id then we have to check that transaction.
+    // Otherwise we have to check if V was not invalidated before tx started.
+    if (is_tx_id(v_end)) {
+        // Lookup the specified transaction
+        transaction::ptr other_tx;
+        tx_tab.find(v_end, other_tx);
+
+        // V (possibly invalidated by other_tx) is only visible to tx
+        // if other_tx is active, has aborted or has committed after
+        // tx started. If other_tx committed before tx then V was
+        // invalid before tx started and is thus invisible.
+        if (other_tx->getStatus().load() == transaction::COMMITTED &&
+                other_tx->getEnd() < tx->getBegin())
+            return false;
+    }
+    else {
+        // V is only visible to tx if it is not been invalidated prior to tx.
+        //
+        // Note: This constraint is less restrictive than its counterpart
+        // in write(). Writing forbids any invalidation even if V is
+        // still valid when tx started.
+        if (v_end < tx->getBegin())
+            return false;
+    }
+
+    // If we reach this point all constraints were met so
+    // we found a potential candidate version.
+    return true;
+}
+
+bool store::isWritable(detail::version::ptr& v, transaction::ptr tx)
+{
+    auto v_begin = v->begin;
+    auto v_end = v->end.load();
+
+    // Check if begin-field contains a transaction id.
+    // If so, then V might still be dirty so we have to
+    // look up its associated transaction and determine whether
+    // (1) it committed and (2) whether that happened before tx started.
+    // In the absence of a tx id, V is clearly committed but we have to
+    // check if that happened before tx started.
+    if (is_tx_id(v_begin)) {
+        // If V was created by tx then it is visible to tx
+        if (v_begin == tx->getId())
+            return true;
+
+        // Lookup the specified transaction
+        transaction::ptr other_tx;
+        tx_tab.find(v_begin, other_tx);
+
+        // V (written by other_tx) is only visible to tx if other_tx
+        // has committed before tx started.
+        //
+        // Note: This is the same assertion as is used for reading.
+        if (other_tx->getStatus().load() != transaction::COMMITTED ||
+                other_tx->getEnd() > tx->getBegin())
+            return false;
+    }
+    else if (v_begin >= tx->getBegin()) {
+        // V is only visible to tx if it was committed before tx started.
+        //
+        // Note: This is the same assertion as is used for reading.
+        return false;
+    }
+
+    // Check if end-field contains a transaction id.
+    // If so, then V might be outdated so we have to look up
+    // its associated transaction and determine whether it aborted.
+    // If it aborted then there may be a newer version of V but that
+    // is invisible to tx as it was not committed. Hence V is visible to tx.
+    // If it did not abort then it is still committed or active which means
+    // that either V is now invalid or a write-write conflict would occur.
+    // In the absence of a tx id, V is clearly committed but may be outdated.
+    // In that case we have to check its timestamp for invalidation.
+    if (is_tx_id(v_end)) {
+        // Lookup the specified transaction
+        transaction::ptr other_tx;
+        tx_tab.find(v_end, other_tx);
+
+        // V is only visible to tx if other_tx has aborted.
+        if (other_tx->getStatus().load() != transaction::FAILED)
+            return false;
+    }
+    else if (v_end != INF) {
+        // V is only visible to tx if it is not been invalidated (no matter when).
+        //
+        // Note: This constraint is more restrictive than its
+        // counterpart in read(). Reading allows invalidation
+        // provided V was still valid when tx started.
+        return false;
+    }
+
+    // If we reach this point all constraints were met so
+    // we found a potential candidate version.
+    return true;
 }
 
 void store::persist(transaction::ptr tx)

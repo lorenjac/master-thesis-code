@@ -121,6 +121,11 @@ private:
     void persist(transaction::ptr tx);
     void rollback(transaction::ptr tx);
     void init();
+
+    detail::version::ptr getVersionW(detail::history::ptr& history, transaction::ptr tx);
+    detail::version::ptr getVersionR(detail::history::ptr& history, transaction::ptr tx);
+    bool isWritable(detail::version::ptr& v, transaction::ptr tx);
+    bool isReadable(detail::version::ptr& v, transaction::ptr tx);
 };
 
 }
