@@ -78,15 +78,15 @@ void store::init()
             });
         }
 
-        // TODO init(): remove empty/purged histories
-        // index->erase_if([](auto& key, auto& hist){
-        //     return hist->chain.empty();
-        // });
-
         // Release the lock on the current history, as it may have become
         // persistent in a previous session
         hist->mutex.unlock();
     }
+
+    // TODO init(): remove empty/purged histories
+    // index->erase_if([](auto& key, auto& hist){
+    //     return hist->chain.empty();
+    // });
 
     // Increase timestamp counter. This way, all subsequent transactions
     // of this session have higher timestamps than all the versions that
@@ -213,6 +213,7 @@ int store::read(transaction::ptr tx, const key_type& key, mapped_type& result)
     // auto v = *it;
 
     // TODO read(): check if non-reversed for-loop is correct
+    // TODO read(): start scan with latest version
     for (auto v : history->chain) {
 
         // Read begin/end fields
@@ -540,8 +541,8 @@ int store::drop(transaction::ptr tx, const key_type& key)
 
     std::cout << "store::drop(): history exists" << std::endl;
 
-    // In orde to prevent concurrent modification, we need to
-    // make sure that no one else can access the history.
+    // In order to ensure a consistent view on the history, we need to
+    // make sure that no one else can modify it.
     history->mutex.lock();
 
     // Abort if no version of the queried data item exists
@@ -553,9 +554,8 @@ int store::drop(transaction::ptr tx, const key_type& key)
     // The latest committed version suitable for writing
     detail::version::ptr candidate;
 
-    // End timestamp of candidate version
-    // We will need this later when determining
-    // whether another tx grabbed our candidate before us.
+    // End timestamp of candidate version. We will need this later when
+    // determining whether another tx grabbed our candidate before us.
     stamp_type v_end;
 
     // Scan history for latest committed version which is older than tx.
@@ -566,7 +566,6 @@ int store::drop(transaction::ptr tx, const key_type& key)
     for (auto& v : history->chain) {
 
         // atomically read begin/end fields
-        // auto v_begin = v->begin.load();
         auto v_begin = v->begin;
         v_end = v->end.load();
 
@@ -645,22 +644,21 @@ int store::drop(transaction::ptr tx, const key_type& key)
     std::cout << "store::drop(): version found" << std::endl;
 
     // Atomically set id of tx as end timestamp of version to be updated.
-    // If this CAS succeeds this transaction has exclusive write access
-    // to the candidate while all other contesters will fail. Likewise,
-    // if another transaction precedes tx then tx must fail. We compare
-    // with v_end because that is the timestamp/tid we saw during visibility
-    // check. If someone preceded us then v->end will be different now.
+    // If this CAS succeeds then this transaction has exclusive write access
+    // to the candidate while all other contesters fail. Likewise, if another
+    // transaction precedes tx then tx fails. We compare with v_end because
+    // that is the timestamp/tid we saw during visibility check. If someone
+    // preceded us then v->end will be different now in which case we fail.
     if (!candidate->end.compare_exchange_strong(v_end, tx->getId()))
         return abort(tx, WRITE_CONFLICT);
 
-    // If we reach this point, we're good to go! :-)
-
-    // Placing tx's id in the end field of the candidate version V
-    // was actually all we really had to do here. This invalidates
-    // V as soon as tx commits and as we do not emit a new version
-    // here, V will be effectively removed. GC may pick it up later.
-
-    // Update remove_set
+    // Placing tx's id in the end field of the candidate version V was actually
+    // all we really had to do here. This invalidates V as soon as tx commits.
+    // We do not delete V because tx could still fail in which case we need to
+    // be able to rollback. Likewise, if V is the currently the only version in
+    // its history, then we cannot delete that history. This can be done on
+    // successful commit or later (e.g. GC). For now, we only add V to our
+    // remove set, so that we can rollback if need be.
     tx->getRemoveSet().emplace_back(key, candidate);
     return OK;
 }
