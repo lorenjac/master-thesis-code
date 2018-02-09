@@ -8,7 +8,7 @@
 
 ## Build Setup
 
-In this folder, create directory `lib`. Inside `lib` create soft links to your 
+In this folder, create directory `lib`. Inside `lib` create soft links to your
 local copies of **pmdk** and **libcuckoo**. The Makefile requires these names.
 
 ```
@@ -16,7 +16,7 @@ mkdir lib
 ln -s <path to pmdk repository> lib/pmdk
 ln -s <path to libcuckoo repository> lib/libcuckoo
 ```
- 
+
 In the end, build the **pmdk** libraries using `make`. Installing the binaries
 is not required. Instead the symlinks will be used to link against the **pmdk**
 statically.
@@ -38,10 +38,8 @@ file locks which seems to cause trouble on some systems. Therefore it is
 within the virtual machine filesystem at all times, respectively. Currently,
 The main executable is hard-coded to use `/tmp/nvm`. Use or change at will.
 
-The main executable does not require arguments. Providing no arguments simply
-does nothing but to load the key-value store and shut it down again. There are
-commands for writing, reading, and deleting items. For help provide `h` or
-`help`.
+The main executable does not require arguments. Providing no arguments invokes
+a basic interactive mode, where single instructions can be run as transactions. There are commands for writing, reading, and deleting items. For help provide `h` or `help`.
 
 ```
 ./bin/<program>
