@@ -116,10 +116,10 @@ public:
 // ############################################################################
 
 private:
-    int _update(transaction::ptr tx, const key_type& key, const mapped_type& value, detail::history::ptr history);
+    // int _update(transaction::ptr tx, const key_type& key, const mapped_type& value, detail::history::ptr history);
     int _insert(transaction::ptr tx, const key_type& key, const mapped_type& value);
     bool installVersions(transaction::ptr tx);
-    void installEndStamps(transaction::ptr tx);
+    void finalizeStamps(transaction::ptr tx);
     void rollback(transaction::ptr tx);
     bool validate(transaction::ptr tx);
     void init();
@@ -128,6 +128,9 @@ private:
     detail::version::ptr getVersionR(detail::history::ptr& history, transaction::ptr tx);
     bool isWritable(detail::version::ptr& v, transaction::ptr tx);
     bool isReadable(detail::version::ptr& v, transaction::ptr tx);
+
+    transaction::status_code get_tx_status(const id_type id);
+    bool has_valid_entries(const detail::history::ptr& hist);
 };
 
 }

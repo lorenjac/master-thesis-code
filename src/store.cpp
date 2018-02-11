@@ -1,6 +1,7 @@
 #include "store.hpp"
 
 #include <memory>
+// #include <stdexcept>
 
 namespace midas {
 
@@ -15,6 +16,29 @@ inline bool is_tx_id(const stamp_type data)
 inline bool is_valid_tx(const transaction::ptr tx)
 {
     return (tx && tx->getStatus().load() == transaction::ACTIVE);
+}
+
+transaction::status_code store::get_tx_status(const id_type id)
+{
+    transaction::ptr other_tx;
+    tx_tab.find(id, other_tx);
+    return other_tx->getStatus().load();
+}
+
+bool store::has_valid_entries(const detail::history::ptr& hist)
+{
+    for (auto& v : hist->chain) {
+        auto v_begin = v->begin;
+        auto v_end = v->end.load();
+        if (is_tx_id(v_end) && get_tx_status(v_end) == transaction::FAILED) {
+            return true;
+        }
+        else if (v_end == INF && (!is_tx_id(v_begin) ||
+                get_tx_status(v_begin) == transaction::COMMITTED)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 store::store(pool_type& pop)
@@ -181,7 +205,7 @@ int store::commit(transaction::ptr tx)
     tx->getStatus().store(transaction::COMMITTED);
 
     // Propagate end timestamp of tx to end/begin fields of original/new versions
-    installEndStamps(tx);
+    finalizeStamps(tx);
 
     std::cout << "store::commit(): committed transaction {";
     std::cout << "id=" << tx->getId();
@@ -258,50 +282,47 @@ int store::write(transaction::ptr tx, const key_type& key, const mapped_type& va
         return OK;
     }
 
-    // TODO write(): make sure empty histories can be updated
-    //  (A) remove history as soon as it becomes empty (neutral to update/insert)
-    //  (B) keep empty histories and enable insertion with _insert() (spares heap ops)
-
-    int status = OK;
-    detail::history::ptr history;
+    std::cout << "write(): item not in change set" << std::endl;
 
     index_mutex.lock();
-    if (index->get(key, history)) {
-        // We no longer need the index so unlock it
-        index_mutex.unlock();
-        status = _update(tx, key, value, history);
-    }
-    else {
-        // We still need the index for insertion so keep it locked
-        status = _insert(tx, key, value);
-        index_mutex.unlock();
-    }
-    return status;
-}
+    detail::history::ptr history;
+    index->get(key, history);
+    index_mutex.unlock();
 
-int store::_update(transaction::ptr tx, const key_type& key, const mapped_type& value, detail::history::ptr history)
-{
-    std::cout << "store::_update(tx{id=" << tx->getId() << "}):" << '\n';
+    if (!history)
+        return _insert(tx, key, value);
 
     history->mutex.lock();
-    detail::version::ptr candidate = getVersionW(history, tx);
-    if (!candidate)
-        return abort(tx, VALUE_NOT_FOUND);
+    if (has_valid_entries(history)) {
 
-    // Mark version as temporary-invalid
-    pmdk::transaction::exec_tx(pop, [&,this](){
-        candidate->end.store(tx->getId());
-    });
+        std::cout << "write(): history exists and as valid entries" << std::endl;
 
-    // Let others enter the history
-    history->mutex.unlock();
+        detail::version::ptr candidate = getVersionW(history, tx);
+        if (!candidate)
+            return abort(tx, VALUE_NOT_FOUND);
 
-    // Update changeset of tx
-    tx->getChangeSet().emplace(key, transaction::Mod{
-        transaction::Mod::Kind::Update,
-        candidate,
-        value
-    });
+        // Mark version as temporary-invalid
+        pmdk::transaction::exec_tx(pop, [&,this](){
+            candidate->end.store(tx->getId());
+        });
+
+        // Let others enter the history
+        history->mutex.unlock();
+
+        // Update changeset of tx
+        tx->getChangeSet().emplace(key, transaction::Mod{
+            transaction::Mod::Kind::Update,
+            candidate,
+            value,
+            nullptr
+        });
+    }
+    else {
+        std::cout << "write(): no history or no valid entries" << std::endl;
+
+        history->mutex.unlock();
+        return _insert(tx, key, value);
+    }
     return OK;
 }
 
@@ -312,7 +333,8 @@ int store::_insert(transaction::ptr tx, const key_type& key, const mapped_type& 
     tx->getChangeSet().emplace(key, transaction::Mod{
         transaction::Mod::Kind::Insert,
         nullptr,
-        value
+        value,
+        nullptr
     });
     return OK;
 }
@@ -344,7 +366,7 @@ int store::drop(transaction::ptr tx, const key_type& key)
                 // operation is not synchronized with regard to is history.
                 // However, the version already carries our id so we have full
                 // ownership. Releasing it can cause no damage.
-                mod.version->end.store(INF);
+                mod.v_origin->end.store(INF);
             });
         }
         else if (mod.code == transaction::Mod::Kind::Remove) {
@@ -379,7 +401,8 @@ int store::drop(transaction::ptr tx, const key_type& key)
     tx->getChangeSet().emplace(key, transaction::Mod{
         transaction::Mod::Kind::Remove,
         candidate,
-        ""
+        "",
+        nullptr
     });
     return OK;
 }
@@ -532,19 +555,22 @@ bool store::installVersions(transaction::ptr tx)
 {
     std::cout << "store::installVersions(tx{id=" << tx->getId() << "}):" << '\n';
 
-    const auto tx_end_stamp = tx->getEnd();
+    bool success = true;
+    const auto tid = tx->getId();
     pmdk::transaction::exec_tx(pop, [&,this](){
-        for (auto [key, change] : tx->getChangeSet()) {
+        for (auto& [key, change] : tx->getChangeSet()) {
             // Do nothing for removals
             if (change.code == transaction::Mod::Kind::Remove)
                 continue;
 
             // Create new version
             auto new_version = pmdk::make_persistent<detail::version>();
-            // FIXME placing end time stamp here is wrong (tx has not committed)
-            new_version->begin = tx_end_stamp;
+            new_version->begin = tid;
             new_version->data = change.delta;
             new_version->end = INF;
+
+            // Register new version with change set
+            change.v_new = new_version;
 
             // Get history of version (create if needed)
             detail::history::ptr history;
@@ -554,17 +580,39 @@ bool store::installVersions(transaction::ptr tx)
                 index_mutex.unlock();
             }
             else if (change.code == transaction::Mod::Kind::Insert) {
-                history = pmdk::make_persistent<detail::history>();
-                index_mutex.lock();
-                bool insertSuccess = index->put(key, history, pop);
-                if (!insertSuccess) {
-                    // FIXME handle ww-conflict when installing insertions
-                    // If another transaction managed to insert a history for
-                    // the same key before us, then we clearly have a
-                    // write/write conflict in which case we must rollback
-                    // all our installed versions / histories
 
-                    // Should be fine if history is empty or has no valid versions
+                detail::history::ptr exist_hist;
+
+                // Handle ww-conflict when installing insertions. If another
+                // transaction managed to insert a history for the same key
+                // before us, then we clearly have a write/write conflict in
+                // which case we must rollback all our installed versions and
+                // histories
+                index_mutex.lock();
+                if (index->get(key, exist_hist)) {
+                    exist_hist->mutex.lock();
+                    auto hasValidEntries = has_valid_entries(exist_hist);
+                    exist_hist->mutex.unlock();
+                    if (!hasValidEntries) {
+                        history = exist_hist;
+                    }
+                    else {
+                        std::cout << "installVersions(): write/write conflict!\n";
+                        index_mutex.unlock();
+                        success = false;
+                        break;
+                    }
+                }
+                else {
+                    history = pmdk::make_persistent<detail::history>();
+                    bool insertSuccess = index->put(key, history, pop);
+                    if (!insertSuccess) {
+                        pmdk::delete_persistent<detail::history>(history);
+                        std::cout << "installVersions(): write/write conflict!\n";
+                        index_mutex.unlock();
+                        success = false;
+                        break;
+                    }
                 }
                 index_mutex.unlock();
             }
@@ -576,23 +624,31 @@ bool store::installVersions(transaction::ptr tx)
             history->mutex.unlock();
         }
     });
-    return true;
+    return success;
 }
 
-void store::installEndStamps(transaction::ptr tx)
+void store::finalizeStamps(transaction::ptr tx)
 {
-    std::cout << "store::installEndStamps(tx{id=" << tx->getId() << "}):" << '\n';
+    std::cout << "store::finalizeStamps(tx{id=" << tx->getId() << "}):" << '\n';
 
     const auto tx_end_stamp = tx->getEnd();
     pmdk::transaction::exec_tx(pop, [&,this](){
-        // Finalize timestamps on all outdated versions
-        // All new versions are already created with their final timestamp
+        // Finalize timestamps on all old and new versions
         for (auto [key, change] : tx->getChangeSet()) {
             (void)key;
-            if (change.code == transaction::Mod::Kind::Update ||
-                    change.code == transaction::Mod::Kind::Remove) {
-                change.version->end.store(tx_end_stamp);
-                // TODO make new versions valid here
+            switch (change.code) {
+            case transaction::Mod::Kind::Insert:
+                change.v_new->begin = tx_end_stamp;
+                break;
+
+            case transaction::Mod::Kind::Update:
+                change.v_new->begin = tx_end_stamp;
+                change.v_origin->end.store(tx_end_stamp);
+                break;
+
+            case transaction::Mod::Kind::Remove:
+                change.v_origin->end.store(tx_end_stamp);
+                break;
             }
         }
     });
@@ -607,9 +663,28 @@ void store::rollback(transaction::ptr tx)
         // newly inserted items are never created so no rollback needed
         for (auto [key, change] : tx->getChangeSet()) {
             (void)key;
-            if (change.code == transaction::Mod::Kind::Update ||
-                    change.code == transaction::Mod::Kind::Remove) {
-                change.version->end.store(INF);
+            // FIXME protect histories for safe rollback
+            switch (change.code) {
+            case transaction::Mod::Kind::Insert:
+                if (change.v_new) {
+                    change.v_new->begin = 0;
+                    change.v_new->end = 0;
+                }
+                break;
+
+            case transaction::Mod::Kind::Update:
+                if (change.v_new) {
+                    change.v_new->begin = 0;
+                    change.v_new->end = 0;
+                }
+                // FIXME possibly overwriting concurrent updaters id here
+                change.v_origin->end.store(INF);
+                break;
+
+            case transaction::Mod::Kind::Remove:
+                // FIXME possibly overwriting concurrent updaters id here
+                change.v_origin->end.store(INF);
+                break;
             }
         }
     });
