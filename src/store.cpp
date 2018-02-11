@@ -12,6 +12,11 @@ inline bool is_tx_id(const stamp_type data)
     return data & 1;
 }
 
+inline bool is_valid_tx(const transaction::ptr tx)
+{
+    return (tx && tx->getStatus().load() == transaction::ACTIVE);
+}
+
 store::store(pool_type& pop)
     : pop{pop}
     , index{}
@@ -68,10 +73,22 @@ void store::init()
                 // std::cout << "'" << std::endl;
 
                 auto& latest = chain.get(0);
-                if (latest->end == INF) {
+                if (is_tx_id(latest->end)) {
+                    // On recent session a transaction invalidated the latest
+                    // item but failed to commit, so we have to revalidate it.
+                    latest->begin = next_ts;
+                    latest->end = INF;
+                }
+                else if (latest->end == INF) {
+                    // Recent session ended normally, but begin timestamps
+                    // of valid items are no longer valid, so we have to reset
+                    // them
                     latest->begin = next_ts;
                 }
                 else {
+                    // Recent session ended normally, but properly invalidated
+                    // items are still there, so we should delete them
+                    // altogether
                     pmdk::delete_persistent<detail::version>(latest);
                     chain.remove(0, pop);
                 }
@@ -119,10 +136,11 @@ transaction::ptr store::begin()
 
 int store::abort(transaction::ptr tx, int reason)
 {
-    std::cout << "store::abort(" << reason << ")" << std::endl;
+    std::cout << "store::abort(tx{id=" << tx->getId() << "}";
+    std::cout << ", reason=" << reason << "):" << '\n';
 
     // Reject invalid or inactive transactions.
-    if (!tx || tx->getStatus().load() != transaction::ACTIVE)
+    if (!is_valid_tx(tx))
         return INVALID_TX;
 
     // Mark this transaction as aborted/failed.
@@ -140,16 +158,21 @@ int store::abort(transaction::ptr tx, int reason)
 
 int store::commit(transaction::ptr tx)
 {
-    std::cout << "store::commit()" << std::endl;
+    std::cout << "store::commit(tx{id=" << tx->getId() << "}):" << '\n';
 
     // Reject invalid or inactive transactions.
-    if (!tx || tx->getStatus().load() != transaction::ACTIVE)
+    if (!is_valid_tx(tx))
         return INVALID_TX;
 
     // Set tx end timestamp
     tx->setEnd(next_ts.fetch_add(2));
 
     // Note: This is where validation would take place (not required for snapshot isolation)
+    // if (!validate(tx))
+    //     return abort(tx, 0xDEADBEEF);
+
+    if (!installVersions(tx))
+        return abort(tx, 0xDEADBEEF);
 
     // Mark tx as committed.
     // This must be done atomically because operations of concurrent
@@ -158,7 +181,7 @@ int store::commit(transaction::ptr tx)
     tx->getStatus().store(transaction::COMMITTED);
 
     // Propagate end timestamp of tx to end/begin fields of original/new versions
-    persist(tx);
+    installEndStamps(tx);
 
     std::cout << "store::commit(): committed transaction {";
     std::cout << "id=" << tx->getId();
@@ -175,18 +198,18 @@ int store::commit(transaction::ptr tx)
 
 int store::read(transaction::ptr tx, const key_type& key, mapped_type& result)
 {
+    std::cout << "store::read(tx{id=" << tx->getId() << "}):" << '\n';
+
     // Reject invalid or inactive transactions.
-    if (!tx || tx->getStatus().load() != transaction::ACTIVE)
+    if (!is_valid_tx(tx))
         return INVALID_TX;
 
     // Look up data item. Abort if key does not exist.
-    // std::cout << "store::read(): looking up '" << key << "'" << std::endl;
     index_mutex.lock();
     detail::history::ptr history;
     auto status = index->get(key, history);
     index_mutex.unlock();
     if (!status) {
-        // std::cout << "store::read(): key '" << key << "' does not exist" << std::endl;
         return abort(tx, VALUE_NOT_FOUND);
     }
 
@@ -199,10 +222,10 @@ int store::read(transaction::ptr tx, const key_type& key, mapped_type& result)
     if (!candidate)
         return abort(tx, VALUE_NOT_FOUND);
 
-    // std::cout << "store::read(): version found for key '" << key << "': {";
-    // std::cout << "begin=" << candidate->begin;
-    // std::cout << ", end=" << candidate->end;
-    // std::cout << ", data=" << candidate->data << "}\n";
+    std::cout << "store::read(): version found for key '" << key << "': {";
+    std::cout << "begin=" << candidate->begin;
+    std::cout << ", end=" << candidate->end;
+    std::cout << ", data=" << candidate->data << "}\n";
 
     // Retrieve data from selected version
     result = candidate->data.to_std_string();
@@ -211,9 +234,29 @@ int store::read(transaction::ptr tx, const key_type& key, mapped_type& result)
 
 int store::write(transaction::ptr tx, const key_type& key, const mapped_type& value)
 {
+    std::cout << "store::write(tx{id=" << tx->getId() << "}):" << '\n';
+
     // Reject invalid or inactive transactions.
-    if (!tx || tx->getStatus().load() != transaction::ACTIVE)
+    if (!is_valid_tx(tx))
         return INVALID_TX;
+
+    // Check if item was written before in the transaction
+    auto& changeSet = tx->getChangeSet();
+    auto changeIter = changeSet.find(key);
+    if (changeIter != changeSet.end()) {
+        auto& mod = changeIter->second;
+
+        // Update the delta on the change set
+        mod.delta = value;
+
+        // The version affected by this change was 'removed' earlier in this
+        // transaction so we change the modification from removal to update.
+        // Updates remain updates, as do inserts.
+        if (mod.code == transaction::Mod::Kind::Remove) {
+            mod.code = transaction::Mod::Kind::Update;
+        }
+        return OK;
+    }
 
     // TODO write(): make sure empty histories can be updated
     //  (A) remove history as soon as it becomes empty (neutral to update/insert)
@@ -224,14 +267,11 @@ int store::write(transaction::ptr tx, const key_type& key, const mapped_type& va
 
     index_mutex.lock();
     if (index->get(key, history)) {
-
         // We no longer need the index so unlock it
         index_mutex.unlock();
         status = _update(tx, key, value, history);
     }
     else {
-        // std::cout << "store::write(): key '" << key << "' does not exist" << std::endl;
-
         // We still need the index for insertion so keep it locked
         status = _insert(tx, key, value);
         index_mutex.unlock();
@@ -241,84 +281,79 @@ int store::write(transaction::ptr tx, const key_type& key, const mapped_type& va
 
 int store::_update(transaction::ptr tx, const key_type& key, const mapped_type& value, detail::history::ptr history)
 {
-    // std::cout << "store::_update()" << std::endl;
+    std::cout << "store::_update(tx{id=" << tx->getId() << "}):" << '\n';
 
     history->mutex.lock();
     detail::version::ptr candidate = getVersionW(history, tx);
     if (!candidate)
         return abort(tx, VALUE_NOT_FOUND);
 
-    if (candidate->begin == tx->getId()) {
-        candidate->data = value;
-        history->mutex.unlock();
-        return OK;
-    }
-    candidate->end.store(tx->getId());
-    history->mutex.unlock();
-
-    // Create new version
-    detail::version::ptr new_version;
+    // Mark version as temporary-invalid
     pmdk::transaction::exec_tx(pop, [&,this](){
-        new_version = pmdk::make_persistent<detail::version>();
-        new_version->begin = tx->getId();
-        new_version->data = value;
-        new_version->end = INF;
+        candidate->end.store(tx->getId());
     });
 
-    // Update write_set with a before-after pair of this write operation
-    // tx->write_set.emplace_back(candidate, new_version);
-    tx->getWriteSet().emplace_back(candidate, new_version);
-
-    // Add new version to history
-    history->mutex.lock();
-    history->chain.append(new_version, pop);
+    // Let others enter the history
     history->mutex.unlock();
+
+    // Update changeset of tx
+    tx->getChangeSet().emplace(key, transaction::Mod{
+        transaction::Mod::Kind::Update,
+        candidate,
+        value
+    });
     return OK;
 }
 
 int store::_insert(transaction::ptr tx, const key_type& key, const mapped_type& value)
 {
-    // std::cout << "store::_insert()" << std::endl;
+    std::cout << "store::_insert(tx{id=" << tx->getId() << "}):" << '\n';
 
-    detail::version::ptr new_version;
-    pmdk::transaction::exec_tx(pop, [&,this](){
-        // Create new version
-        new_version = pmdk::make_persistent<detail::version>();
-        new_version->begin = tx->getId();
-        new_version->data = value;
-        new_version->end = INF;
-
-        // std::cout << "store::_insert(): created new version {";
-        // std::cout << "data=" << new_version->data;
-        // std::cout << ", begin=" << new_version->begin;
-        // std::cout << ", end=" << new_version->end << "}\n";
-
-        // Create new history with initial version and add it to the index.
-        // We could do that lazily on commit but then write-write conlicts
-        // would be possible during commit (currently they are only bound
-        // to happen when updating an existing item). Also its consistent
-        // with updating items, where versions are also inserted into
-        // their histories immediately.
-        auto new_history = pmdk::make_persistent<detail::history>();
-        new_history->chain.append(new_version, pop);
-
-        // FIXME _insert(): can insertion of new history fail? what if so?
-        index->put(key, new_history, pop);
+    tx->getChangeSet().emplace(key, transaction::Mod{
+        transaction::Mod::Kind::Insert,
+        nullptr,
+        value
     });
-
-    // Register this modification with its associated transaction, so that
-    // its timestamps can be finalized on commit.
-    tx->getCreateSet().emplace_back(key, new_version);
     return OK;
 }
 
 int store::drop(transaction::ptr tx, const key_type& key)
 {
-    // std::cout << "store::drop()" << std::endl;
+    std::cout << "store::drop(tx{id=" << tx->getId() << "}):" << '\n';
 
     // Reject invalid or inactive transactions.
-    if (!tx || tx->getStatus().load() != transaction::ACTIVE)
+    if (!is_valid_tx(tx))
         return INVALID_TX;
+
+    // Check if item was written before in the transaction
+    auto& changeSet = tx->getChangeSet();
+    auto changeIter = changeSet.find(key);
+    if (changeIter != changeSet.end()) {
+        auto& mod = changeIter->second;
+        if (mod.code == transaction::Mod::Kind::Update) {
+            // The version affected by this change was 'updated' earlier in this
+            // transaction so we change the modification from update to removal.
+            mod.code = transaction::Mod::Kind::Remove;
+        }
+        else if (mod.code == transaction::Mod::Kind::Insert) {
+            // The version affected by this change was 'inserted' earlier in
+            // this transaction so we simply discard the change altogether.
+            changeSet.erase(changeIter);
+            pmdk::transaction::exec_tx(pop, [&,this](){
+                // Revalidate the temporarily invalidated version. This
+                // operation is not synchronized with regard to is history.
+                // However, the version already carries our id so we have full
+                // ownership. Releasing it can cause no damage.
+                mod.version->end.store(INF);
+            });
+        }
+        else if (mod.code == transaction::Mod::Kind::Remove) {
+            // The version affected by this change was 'removed' earlier in
+            // this transaction already, so we have fail here
+            return VALUE_NOT_FOUND;
+        }
+        return OK;
+    }
 
     // Look up history of data item. Abort if key does not exist.
     detail::history::ptr history;
@@ -335,43 +370,23 @@ int store::drop(transaction::ptr tx, const key_type& key)
     if (!candidate)
         return abort(tx, VALUE_NOT_FOUND);
 
-    if (candidate->begin == tx->getId()) {
-        // We want to remove a version that was created by the same tx earlier.
-        // Again, we cannot delete V right away. Instead we have to
-        //  * re-validate the previously invalidated version (defacto rollback)
-        //  * invalidate our version (defacto rollback)
-        //  * remove delta from write set
-        // Note, that we do not add V to our remove set because persist() would
-        // make it look like V was invalidated by this tx when in fact it has
-        // never existed outside this transaction.
-        //
-        // Note: currently, we are OK with letting persist() first validate and
-        // then invalidate V with commit timestamps of tx. So we do add V to
-        // the remove set. Still, we must re-validate V's predecessor (if any).
-        auto iter = tx->getWriteSet().begin();
-        auto end = tx->getWriteSet().end();
-        for (; iter != end; ++iter) {
-            auto [before, after] = *iter;
-            if (after == candidate) {
-                // after->begin = 0;
-                // after->end.store(0);
-                before->end.store(INF);
-                // tx->getWriteSet().erase(iter);
-                break;
-            }
-        }
-    }
-
     // Tentatively invalidate V with our tx id
-    candidate->end.store(tx->getId());
+    pmdk::transaction::exec_tx(pop, [&,this](){
+        candidate->end.store(tx->getId());
+    });
     history->mutex.unlock();
 
-    tx->getRemoveSet().emplace_back(key, candidate);
+    tx->getChangeSet().emplace(key, transaction::Mod{
+        transaction::Mod::Kind::Remove,
+        candidate,
+        ""
+    });
     return OK;
 }
 
 detail::version::ptr store::getVersionW(detail::history::ptr& history, transaction::ptr tx)
 {
+    std::cout << "store::getVersionW(tx{id=" << tx->getId() << "}):" << '\n';
     for (auto& v : history->chain) {
         if (isWritable(v, tx))
             return v;
@@ -381,6 +396,7 @@ detail::version::ptr store::getVersionW(detail::history::ptr& history, transacti
 
 detail::version::ptr store::getVersionR(detail::history::ptr& history, transaction::ptr tx)
 {
+    std::cout << "store::getVersionR(tx{id=" << tx->getId() << "}):" << '\n';
     for (auto& v : history->chain) {
         if (isReadable(v, tx))
             return v;
@@ -401,10 +417,6 @@ bool store::isReadable(detail::version::ptr& v, transaction::ptr tx)
     // In the absence of a tx id, V is clearly committed but we have to
     // check if that happened before tx started.
     if (is_tx_id(v_begin)) {
-        // If V was created by tx then it is visible to tx
-        if (v_begin == tx->getId())
-            return true;
-
         // Lookup the specified transaction
         transaction::ptr other_tx;
         tx_tab.find(v_begin, other_tx);
@@ -425,6 +437,7 @@ bool store::isReadable(detail::version::ptr& v, transaction::ptr tx)
     // If it contains a transaction id then we have to check that transaction.
     // Otherwise we have to check if V was not invalidated before tx started.
     if (is_tx_id(v_end)) {
+
         // Lookup the specified transaction
         transaction::ptr other_tx;
         tx_tab.find(v_end, other_tx);
@@ -464,10 +477,6 @@ bool store::isWritable(detail::version::ptr& v, transaction::ptr tx)
     // In the absence of a tx id, V is clearly committed but we have to
     // check if that happened before tx started.
     if (is_tx_id(v_begin)) {
-        // If V was created by tx then it is visible to tx
-        if (v_begin == tx->getId())
-            return true;
-
         // Lookup the specified transaction
         transaction::ptr other_tx;
         tx_tab.find(v_begin, other_tx);
@@ -519,28 +528,72 @@ bool store::isWritable(detail::version::ptr& v, transaction::ptr tx)
     return true;
 }
 
-void store::persist(transaction::ptr tx)
+bool store::installVersions(transaction::ptr tx)
 {
-    std::cout << "store::persist(tx{id=" << tx->getId() << "}):" << '\n';
+    std::cout << "store::installVersions(tx{id=" << tx->getId() << "}):" << '\n';
 
+    const auto tx_end_stamp = tx->getEnd();
     pmdk::transaction::exec_tx(pop, [&,this](){
+        for (auto [key, change] : tx->getChangeSet()) {
+            // Do nothing for removals
+            if (change.code == transaction::Mod::Kind::Remove)
+                continue;
 
-        for (auto& delta : tx->getWriteSet()) {
-            // Update end field of old version.
-            delta.first->end.store(tx->getEnd());
+            // Create new version
+            auto new_version = pmdk::make_persistent<detail::version>();
+            // FIXME placing end time stamp here is wrong (tx has not committed)
+            new_version->begin = tx_end_stamp;
+            new_version->data = change.delta;
+            new_version->end = INF;
 
-            // Update begin field of new version.
-            delta.second->begin = tx->getEnd();
+            // Get history of version (create if needed)
+            detail::history::ptr history;
+            if (change.code == transaction::Mod::Kind::Update) {
+                index_mutex.lock();
+                index->get(key, history);
+                index_mutex.unlock();
+            }
+            else if (change.code == transaction::Mod::Kind::Insert) {
+                history = pmdk::make_persistent<detail::history>();
+                index_mutex.lock();
+                bool insertSuccess = index->put(key, history, pop);
+                if (!insertSuccess) {
+                    // FIXME handle ww-conflict when installing insertions
+                    // If another transaction managed to insert a history for
+                    // the same key before us, then we clearly have a
+                    // write/write conflict in which case we must rollback
+                    // all our installed versions / histories
+
+                    // Should be fine if history is empty or has no valid versions
+                }
+                index_mutex.unlock();
+            }
+
+            // Add new version to item history
+            history->mutex.lock();
+            // TODO make scans faster by inserting at the front
+            history->chain.append(new_version, pop);
+            history->mutex.unlock();
         }
+    });
+    return true;
+}
 
-        // Same as above for created items
-        for (auto& created : tx->getCreateSet()) {
-            created.second->begin = tx->getEnd();
-        }
+void store::installEndStamps(transaction::ptr tx)
+{
+    std::cout << "store::installEndStamps(tx{id=" << tx->getId() << "}):" << '\n';
 
-        // Same as above for removed items
-        for (auto& removed : tx->getRemoveSet()) {
-            removed.second->end.store(tx->getEnd());
+    const auto tx_end_stamp = tx->getEnd();
+    pmdk::transaction::exec_tx(pop, [&,this](){
+        // Finalize timestamps on all outdated versions
+        // All new versions are already created with their final timestamp
+        for (auto [key, change] : tx->getChangeSet()) {
+            (void)key;
+            if (change.code == transaction::Mod::Kind::Update ||
+                    change.code == transaction::Mod::Kind::Remove) {
+                change.version->end.store(tx_end_stamp);
+                // TODO make new versions valid here
+            }
         }
     });
 }
@@ -550,31 +603,14 @@ void store::rollback(transaction::ptr tx)
     std::cout << "store::rollback(tx{id=" << tx->getId() << "}):" << '\n';
 
     pmdk::transaction::exec_tx(pop, [&,this](){
-
-        // Undo all writes
-        for (auto& delta : tx->getWriteSet()) {
-            // Re-validate old version by setting end timestamp (back) to infinity.
-            // When starting the initial write operation, the version must have been writeable.
-            // This means that its end timestamp was either an id of a failed transaction or a
-            // timestamp of infinity. The former would be changed to infinity in the same manner.
-            delta.first->end.store(INF);
-
-            // invalidate the new version (will be collected by GC later)
-            delta.second->begin = 0;
-            delta.second->end.store(0);
-        }
-
-        // Undo all creations
-        for (auto& created : tx->getCreateSet()) {
-            // invalidate the new version (will be collected by GC later)
-            created.second->begin = 0;
-        }
-
-        // Undo all deletions
-        for (auto& removed : tx->getRemoveSet()) {
-            // Re-validate old version by setting end timestamp (back) to infinity.
-            // Same mechanics as for undoing writes.
-            removed.second->end.store(INF);
+        // revalidate updated or removed versions (set end = INF)
+        // newly inserted items are never created so no rollback needed
+        for (auto [key, change] : tx->getChangeSet()) {
+            (void)key;
+            if (change.code == transaction::Mod::Kind::Update ||
+                    change.code == transaction::Mod::Kind::Remove) {
+                change.version->end.store(INF);
+            }
         }
     });
 }
