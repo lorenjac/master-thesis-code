@@ -634,8 +634,16 @@ void store::finalizeStamps(transaction::ptr tx)
     const auto tx_end_stamp = tx->getEnd();
     pmdk::transaction::exec_tx(pop, [&,this](){
         // Finalize timestamps on all old and new versions
-        for (auto [key, change] : tx->getChangeSet()) {
+        for (auto& [key, change] : tx->getChangeSet()) {
+            // Suppress unused variable warning
             (void)key;
+
+            // Access to versions/histories is not synchronized here.
+            // However, at this point, tx must have committed already and all
+            // other transaction can see that. So outdated versions are clearly
+            // marked as such, as are new versions. Therefore, these changes
+            // are neutral and all other transactions will always see valid
+            // data (timestamps or TIDs).
             switch (change.code) {
             case transaction::Mod::Kind::Insert:
                 change.v_new->begin = tx_end_stamp;
@@ -658,14 +666,21 @@ void store::rollback(transaction::ptr tx)
 {
     std::cout << "store::rollback(tx{id=" << tx->getId() << "}):" << '\n';
 
+    auto tid = tx->getId();
     pmdk::transaction::exec_tx(pop, [&,this](){
         // revalidate updated or removed versions (set end = INF)
         // newly inserted items are never created so no rollback needed
-        for (auto [key, change] : tx->getChangeSet()) {
+        for (auto& [key, change] : tx->getChangeSet()) {
+            // Suppress unused variable warning
             (void)key;
-            // FIXME protect histories for safe rollback
+
             switch (change.code) {
             case transaction::Mod::Kind::Insert:
+                // Access to version/history is not synchronized here.
+                // As a result, other transactions scanning this version may
+                // see inconsistent timestamps. However, our tx has not
+                // committed so none of these transactions should be able to
+                // see this version anyway. Therefore, we need not worry here.
                 if (change.v_new) {
                     change.v_new->begin = 0;
                     change.v_new->end = 0;
@@ -673,17 +688,43 @@ void store::rollback(transaction::ptr tx)
                 break;
 
             case transaction::Mod::Kind::Update:
+                // Access to version/history is not synchronized here.
+                // As a result, other transactions scanning this version may
+                // see inconsistent timestamps. However, our tx has not
+                // committed so none of these transactions should be able to
+                // see this version anyway. Therefore, we need not worry here.
                 if (change.v_new) {
                     change.v_new->begin = 0;
                     change.v_new->end = 0;
                 }
-                // FIXME possibly overwriting concurrent updaters id here
-                change.v_origin->end.store(INF);
+
+                // Access to version/history is not synchronized here.
+                // As a result, other transactions (seeing our tx has failed)
+                // could try to acquire ownership for the current version.
+                // Therefore, we need to test if our transaction id is still
+                // there and reset it, otherwise we simply fail because some
+                // other transaction already correctly owns this version.
+                // Since all updaters register themselves atomically, they
+                // will either insert their TID first (in which case we fail
+                // to reset it) or they will find a perfectly INF timestamp
+                // which they can overwrite with their TID without problems.
+                change.v_origin->end.compare_exchange_strong(tid, INF);
+                tid = tx->getId(); // recover from side effect of CAS above
                 break;
 
             case transaction::Mod::Kind::Remove:
-                // FIXME possibly overwriting concurrent updaters id here
-                change.v_origin->end.store(INF);
+                // Access to version/history is not synchronized here.
+                // As a result, other transactions (seeing our tx has failed)
+                // could try to acquire ownership for the current version.
+                // Therefore, we need to test if our transaction id is still
+                // there and reset it, otherwise we simply fail because some
+                // other transaction already correctly owns this version.
+                // Since all updaters register themselves atomically, they
+                // will either insert their TID first (in which case we fail
+                // to reset it) or they will find a perfectly INF timestamp
+                // which they can overwrite with their TID without problems.
+                change.v_origin->end.compare_exchange_strong(tid, INF);
+                tid = tx->getId(); // recover from side effect of CAS above
                 break;
             }
         }
