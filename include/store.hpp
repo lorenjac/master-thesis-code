@@ -111,6 +111,8 @@ public:
     int write(transaction::ptr tx, const key_type& key, const mapped_type& value);
     int drop(transaction::ptr tx, const key_type& key);
 
+    void print();
+
 // ############################################################################
 // PRIVATE API
 // ############################################################################
@@ -131,6 +133,7 @@ private:
 
     transaction::status_code get_tx_status(const id_type id);
     bool has_valid_entries(const detail::history::ptr& hist);
+    void purgeHistory(detail::history::ptr& history);
 };
 
 }

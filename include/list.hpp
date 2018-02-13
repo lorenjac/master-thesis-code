@@ -27,6 +27,8 @@ public:
     using size_type = std::size_t;
     using this_type = list<elem_type>;
 
+    class iterator;
+
 private:
     /**
      * A list node for a doubly-linked list.
@@ -99,12 +101,7 @@ public:
         // Removes all nodes from this list
         // Requires no transaction because dtors are always
         // executed transactionally with delete_persistent()
-	    auto curr = mHead;
-        while (curr) {
-            auto node_to_remove = curr;
-            curr = curr->mNext;
-            pmdk::delete_persistent<node>(node_to_remove);
-        }
+	    clear();
     }
 
     this_type& operator=(const this_type& other) = delete;
@@ -159,16 +156,21 @@ public:
      * Fails, if the specified index is invalid in the other list.
      */
     template <class pool_type>
-    void append_from(list<elem_type>& other, const size_type pos,
+    void append_from(this_type& other, const size_type pos,
             pmdk::pool<pool_type>& pool)
     {
         // Fail if index is invalid
         if (pos >= other.size())
             throw std::out_of_range("index is out of range!");
 
+        // Create and move iterator to specified position
+        auto it = other.begin();
+        for (size_type i = 0; i < pos; ++i)
+            ++it;
+
         // Unlink specified node from other list and append it to this list
         pmdk::transaction::exec_tx(pool, [&,this](){
-            auto unlinked_node = other.unlink(pos);
+            auto unlinked_node = other.unlink(it);
             append(unlinked_node);
         });
     }
@@ -214,16 +216,33 @@ public:
      * Throws std::out_of_range if pos is invalid.
      */
     template <class pool_type>
-    void remove(const size_type pos, pmdk::pool<pool_type>& pool)
+    void erase(const size_type pos, pmdk::pool<pool_type>& pool)
     {
         // Fail if index is invalid
         if (pos >= size())
             throw std::out_of_range("index is out of range!");
 
+        // Create and move iterator to specified position
+        auto it = begin();
+        for (size_type i=0; i<pos; ++i)
+            ++it;
+
+        // Remove element via iterator
+        erase(it, pool);
+    }
+
+    template <class pool_type>
+    iterator erase(iterator it, pmdk::pool<pool_type>& pool)
+    {
+        // Fail if index is invalid
+        if (it == end())
+            throw std::out_of_range("iterator is out of range!");
+
         pmdk::transaction::exec_tx(pool, [&,this](){
-            auto node_to_remove = unlink(pos);
+            auto node_to_remove = unlink(it++);
             pmdk::delete_persistent<node>(node_to_remove);
         });
+        return it; // return iterator to next element or end
     }
 
     /**
@@ -233,16 +252,9 @@ public:
     void clear(pmdk::pool<pool_type>& pool)
     {
         pmdk::transaction::exec_tx(pool, [&,this](){
-            // Starting with first node, remove all nodes
-            auto curr = mHead;
-            while (curr) {
-                auto node_to_remove = curr;
-                curr = curr->mNext;
-                pmdk::delete_persistent<node>(node_to_remove);
-            }
-
-            // Reset all member variables
-            init(pool);
+            // same is achieved through move assignment: *this = this_type{};
+            clear(); // Remove all nodes
+            init(pool); // Reset all member variables
         });
     }
 
@@ -265,6 +277,8 @@ public:
      */
     class iterator
     {
+        friend this_type;
+
     private:
         node* curr;
 
@@ -294,39 +308,39 @@ public:
     iterator begin() { return iterator{mHead.get()}; }
     iterator end() { return iterator{}; }
 
-    /**
-     * Const iterator
-     */
-    class const_iterator
-    {
-    private:
-        node* curr;
-
-    public:
-        explicit const_iterator(node* curr = nullptr)
-            : curr(curr)
-        {}
-
-        const elem_type& operator*() { return curr->mValue; }
-        const elem_type* operator->() { return &curr->mValue; }
-
-        bool operator==(const const_iterator& other) { return curr == other.curr; }
-        bool operator!=(const const_iterator& other) { return curr != other.curr; }
-
-        const_iterator operator++() {
-            auto old = *this;
-            curr = curr->mNext.get();
-            return old;
-        }
-
-        const_iterator operator++(int) {
-            curr = curr->mNext.get();
-            return *this;
-        }
-    };
-
-    const_iterator cbegin() const { return const_iterator{mHead.get()}; }
-    const_iterator cend() const { return const_iterator{}; }
+    // /**
+    //  * Const iterator
+    //  */
+    // class const_iterator
+    // {
+    // private:
+    //     node* curr;
+    //
+    // public:
+    //     explicit const_iterator(node* curr = nullptr)
+    //         : curr(curr)
+    //     {}
+    //
+    //     const elem_type& operator*() { return curr->mValue; }
+    //     const elem_type* operator->() { return &curr->mValue; }
+    //
+    //     bool operator==(const const_iterator& other) { return curr == other.curr; }
+    //     bool operator!=(const const_iterator& other) { return curr != other.curr; }
+    //
+    //     const_iterator operator++() {
+    //         auto old = *this;
+    //         curr = curr->mNext.get();
+    //         return old;
+    //     }
+    //
+    //     const_iterator operator++(int) {
+    //         curr = curr->mNext.get();
+    //         return *this;
+    //     }
+    // };
+    //
+    // const_iterator cbegin() const { return const_iterator{mHead.get()}; }
+    // const_iterator cend() const { return const_iterator{}; }
 
     // Uncomment these functions if you need const iterators in foreach loops
     // const_iterator begin() const { return const_iterator{mHead}; }
@@ -360,21 +374,13 @@ private:
         ++mSize.get_rw();
     }
 
-    /**
-     * Removes a node from the list at the given position.
-     *
-     * This function is agnostic to whether the specified node is to be
-     * deallocated or migrated to another list. Performs not deallocations.
-     *
-     * Also decreases the item count.
-     */
-    pmdk::persistent_ptr<node> unlink(const size_type pos)
+    pmdk::persistent_ptr<node> unlink(const iterator& it)
     {
         // Stores a ptr to a node that will be deleted once it is unlinked
         pmdk::persistent_ptr<node> unlinked;
 
         // Decide whether the node in question is front, back, or in between
-        if (pos == 0) {
+        if (it.curr == mHead.get()) {
             auto tmp = mHead;
 
             // Unset backward link of successor (if such a node exists)
@@ -393,7 +399,7 @@ private:
             // Mark former head for destruction
             unlinked = tmp;
         }
-        else if (pos == size() - 1) {
+        else if (it.curr == mTail.get()) {
             auto tmp = mTail;
 
             // Unset forward link of predecessor.
@@ -410,10 +416,8 @@ private:
             unlinked = tmp;
         }
         else {
-            // Go to node at the specified position
-            auto curr = mHead;
-            for (size_type i = 0; i < pos; ++i)
-                curr = curr->mNext;
+            // Retrieve persistent_ptr to current iterator position
+            auto curr = it.curr->mPrev->mNext;
 
             // Retrieve predecessor and successor of the current node.
             // These must exist because we handled or corner cases before.
@@ -431,6 +435,17 @@ private:
         unlinked->mNext = nullptr;
         unlinked->mPrev = nullptr;
         return unlinked;
+    }
+
+    void clear()
+    {
+        // Starting with first node, remove all nodes
+        auto curr = mHead;
+        while (curr) {
+            auto node_to_remove = curr;
+            curr = curr->mNext;
+            pmdk::delete_persistent<node>(node_to_remove);
+        }
     }
 
 }; // end class list

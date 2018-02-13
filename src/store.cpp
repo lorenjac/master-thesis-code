@@ -67,7 +67,7 @@ void store::init()
     // than the latest version and therefore should only see the latest
     // version. Therefore we remove all other versions.
     //
-    // Also, must handle timestamps from the previous session. Unless we hold
+    // Also, we must handle timestamps from the previous session. Unless we hold
     // the timestamp counter in persistent memory, which would make it even
     // more costly than its atomic operations, we need to make all versions
     // look like they had been committed before the first transaction of
@@ -79,60 +79,91 @@ void store::init()
     // Last but not least, we should unlock all history mutexes, as they
     // may have become persistent in a previous session.
     const auto end = index->end();
-    for (auto iter = index->begin(); iter != end; ++iter) {
-
-        // const auto& key = (*iter)->key.get_ro();
-        // std::cout << "store::init(): resetting history of '" << key << "'\n";
-
-        auto& hist = (*iter)->value;
-        auto& chain = hist->chain;
-        if (chain.size()) {
-            pmdk::transaction::exec_tx(pop, [&,this](){
-                while (chain.size() > 1) {
-                    pmdk::delete_persistent<detail::version>(chain.get(0));
-                    chain.remove(0, pop);
-                }
-
-                // std::cout << "store::init(): resetting '" << chain.get(0)->data;
-                // std::cout << "'" << std::endl;
-
-                auto& latest = chain.get(0);
-                if (is_tx_id(latest->end)) {
-                    // On recent session a transaction invalidated the latest
-                    // item but failed to commit, so we have to revalidate it.
-                    latest->begin = next_ts;
-                    latest->end = INF;
-                }
-                else if (latest->end == INF) {
-                    // Recent session ended normally, but begin timestamps
-                    // of valid items are no longer valid, so we have to reset
-                    // them
-                    latest->begin = next_ts;
-                }
-                else {
-                    // Recent session ended normally, but properly invalidated
-                    // items are still there, so we should delete them
-                    // altogether
-                    pmdk::delete_persistent<detail::version>(latest);
-                    chain.remove(0, pop);
-                }
-            });
-        }
-
-        // Release the lock on the current history, as it may have become
-        // persistent in a previous session
-        hist->mutex.unlock();
+    for (auto it = index->begin(); it != end; ) {
+        auto& hist = (*it)->value;
+        pmdk::transaction::exec_tx(pop, [&,this](){
+            purgeHistory(hist);
+            if (hist->chain.empty()) {
+                // Purge left history empty, so we should remove it from
+                // the index and deallocate it
+                it = index->erase(it, pop);
+                pmdk::delete_persistent<detail::history>(hist);
+            }
+            else {
+                // Release the lock on the current history, as it may have become
+                // persistent in a previous session
+                hist->mutex.unlock();
+                ++it;
+            }
+        });
     }
-
-    // TODO init(): remove empty/purged histories
-    // index->erase_if([](auto& key, auto& hist){
-    //     return hist->chain.empty();
-    // });
 
     // Increase timestamp counter. This way, all subsequent transactions
     // of this session have higher timestamps than all the versions that
     // were reset above.
     next_ts.fetch_add(2);
+}
+
+void store::print()
+{
+    const auto end = index->end();
+    std::cout << "--" << std::endl;
+    std::cout << "buckets: " << index->buckets() << std::endl;
+    std::cout << "size: " << index->size() << std::endl;
+    std::cout << "--" << std::endl;
+    for (auto it = index->begin(); it != end; ++it) {
+        std::cout << "key: "  << (*it)->key.get_ro().to_std_string() << std::endl;
+
+        size_t i = 0;
+        auto history = (*it)->value;
+        for (auto v : history->chain) {
+            if (i++ != 0)
+                std::cout << "  --" << std::endl;
+            std::cout << "  data : " << v->data.to_std_string() << std::endl;
+            std::cout << "  began: " << v->begin << std::endl;
+            std::cout << "  ended: " << v->end<< std::endl;
+        }
+        if (i != 0)
+            std::cout << std::endl;
+    }
+}
+
+void store::purgeHistory(detail::history::ptr& history)
+{
+    const auto first_stamp = next_ts.load();
+    auto& chain = history->chain;
+    auto end = chain.end();
+    for (auto it = chain.begin(); it != end; ) {
+        auto& v = *it;
+        if (is_tx_id(v->begin)) {
+            // V was created before restart but the associated tx
+            // never committed or failed to finalize timestamps.
+            // Therefore, we have to delete V.
+            it = chain.erase(it, pop);
+            pmdk::delete_persistent<detail::version>(v);
+        }
+        else if (v->end == INF) {
+            // V was valid before restart. Make it look like it was
+            // created during this session.
+            v->begin = first_stamp;
+            ++it;
+        }
+        else if (is_tx_id(v->end)) {
+            // V was invalidated but the associated transaction
+            // never committed, so it is valid. Now that V is valid
+            // again, make it look like it was created during this
+            // session.
+            v->begin = first_stamp;
+            v->end = INF;
+            ++it;
+        }
+        else {
+            // V was invalidated and the associated transaction
+            // has committed so we do not need V anymore.
+            it = chain.erase(it, pop);
+            pmdk::delete_persistent<detail::version>(v);
+        }
+    }
 }
 
 transaction::ptr store::begin()
@@ -598,23 +629,25 @@ bool store::installVersions(transaction::ptr tx)
                     }
                     else {
                         std::cout << "installVersions(): write/write conflict!\n";
-                        index_mutex.unlock();
                         success = false;
-                        break;
                     }
                 }
                 else {
                     history = pmdk::make_persistent<detail::history>();
                     bool insertSuccess = index->put(key, history, pop);
                     if (!insertSuccess) {
-                        pmdk::delete_persistent<detail::history>(history);
                         std::cout << "installVersions(): write/write conflict!\n";
-                        index_mutex.unlock();
+                        pmdk::delete_persistent<detail::history>(history);
                         success = false;
-                        break;
                     }
                 }
                 index_mutex.unlock();
+            }
+
+            if (!success) {
+                pmdk::delete_persistent<detail::version>(new_version);
+                change.v_new = nullptr;
+                return;
             }
 
             // Add new version to item history
@@ -668,8 +701,9 @@ void store::rollback(transaction::ptr tx)
 
     auto tid = tx->getId();
     pmdk::transaction::exec_tx(pop, [&,this](){
-        // revalidate updated or removed versions (set end = INF)
-        // newly inserted items are never created so no rollback needed
+        // Revalidate updated or removed versions and _invalidate_ new versions.
+        // There may not be an new version for every insert/update if it was
+        // version installment that led to this rollback.
         for (auto& [key, change] : tx->getChangeSet()) {
             // Suppress unused variable warning
             (void)key;

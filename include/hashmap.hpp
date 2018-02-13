@@ -51,6 +51,8 @@ public:
     // This type is only revealed when retrieving pairs.
     using persistent_key = typename hash_type::persistent_key_type;
 
+    class iterator;
+
     // A persistent key-value pair.
     // The type of values is arbitrary but it is strongly recommended to use
     // pmdk::p<X> for primitives and pmdk::persistent_ptr<X> for classes/PODs.
@@ -229,7 +231,7 @@ public:
         for (const auto& elem : bucket) {
             if (elem->key.get_ro() == key) {
                 pmdk::transaction::exec_tx(pool, [&,this](){
-                    bucket.remove(pos, pool);
+                    bucket.erase(pos, pool); // TODO use iterator variant
                     --mElemCount.get_rw();
                 });
                 found = true;
@@ -238,6 +240,31 @@ public:
             ++pos;
         }
         return found;
+    }
+
+    template <class pool_type>
+    iterator erase(iterator& it, pmdk::pool<pool_type>& pool)
+    {
+        // Return if there are no buckets yet
+        if (it == end())
+            return it;
+
+        // Get info to locate current bucket item
+        auto bucket_it = it.bucket_iter;
+        auto table_idx = it.table_index;
+
+        // Go to next bucket item to avoid invalidation and provide the caller
+        // with a usable iterator to proceed. Still, the iterator could be at
+        // its end, so the caller is in charge of testing for end().
+        ++it;
+
+        // Remove previous bucket item
+        auto& bucket = mBuckets[table_idx];
+        pmdk::transaction::exec_tx(pool, [&,this](){
+            bucket.erase(bucket_it, pool);
+            --mElemCount.get_rw();
+        });
+        return it;
     }
 
     /**
@@ -297,36 +324,50 @@ public:
      */
     class iterator
     {
+        friend this_type;
+
     public:
         using elem_type = typename bucket_type::elem_type;
 
     private:
-        this_type& map;
+        pmdk::persistent_ptr<bucket_type[]> table;
+        size_type table_size;
+
         size_type table_index;
         typename bucket_type::iterator bucket_iter;
         typename bucket_type::iterator bucket_end;
 
     public:
-        explicit iterator(this_type& map, const size_type index)
-            : map{map}
-            , table_index{index}
+        iterator()
+            : table(nullptr)
+            , table_size(0)
+            , table_index(0)
+            , bucket_iter{}
+            , bucket_end{}
+        {}
+
+        iterator(pmdk::persistent_ptr<bucket_type[]> table, 
+                size_type table_size)
+            : table(table)
+            , table_size(table_size)
+            , table_index(0)
             , bucket_iter{}
             , bucket_end{}
         {
-            // Test (a) if items exist to be iterated
-            //      (b) if begin() was called (index is in range) or
-            //          end() was called (index is out of range)
-            if (!map.empty() && table_index < map.mBucketCount.get_ro()) {
-                // Test if there are buckets left to be iterated
-                // If so then get an iterator on the next bucket
-                const auto table_size = map.mBucketCount.get_ro();
-                for (; table_index < table_size; ++table_index) {
-                    if (!map.mBuckets[table_index].empty()) {
-                        auto& bucket = map.mBuckets[table_index];
-                        bucket_iter = bucket.begin();
-                        bucket_end = bucket.end();
-                        break;
-                    }
+            if (!table)
+                table_size = 0;
+
+            seek();
+        }
+
+        void seek()
+        {
+            for (; table_index < table_size; ++table_index) {
+                auto& bucket = table[table_index];
+                if (bucket.size()) {
+                    bucket_iter = bucket.begin();
+                    bucket_end = bucket.end();
+                    break;
                 }
             }
         }
@@ -343,8 +384,7 @@ public:
 
         bool operator==(const iterator& other)
         {
-            return table_index == other.table_index &&
-                bucket_iter == other.bucket_iter;
+            return bucket_iter == other.bucket_iter;
         }
 
         bool operator!=(const iterator& other) { return !(*this == other); }
@@ -356,35 +396,32 @@ public:
         }
 
         iterator operator++() {
-            // Go to next item unless we have reached the end of the
-            // current bucket
-            if (bucket_iter != bucket_end)
-                ++bucket_iter;
+            // Go to next item. Needs no checking because bucket_iter is
+            // invalid if and only if this iterator is invalid. In other words,
+            // if this iterator is not equal to end() this operation must
+            // succeed. Otherwise, behaviour is undefined.
+            ++bucket_iter;
 
-            // Test if we have reached the end of the current bucket
-            // If so then we will try to go to the next bucket
+            // Since bucket_iter is only invalid when this iterator is invalid,
+            // we must find another non-empty bucket or, else, this iterator
+            // becomes invalid.
             if (bucket_iter == bucket_end) {
-                // Test if there are buckets left to be iterated
-                // If so then get an iterator on the next bucket
-                const auto table_size = map.mBucketCount.get_ro();
-                if (table_index < table_size - 1) {
-                    ++table_index;
-                    for (; table_index < table_size; ++table_index) {
-                        if (!map.mBuckets[table_index].empty()) {
-                            auto& bucket = map.mBuckets[table_index];
-                            bucket_iter = bucket.begin();
-                            bucket_end = bucket.end();
-                            break;
-                        }
-                    }
-                }
+                // Starting from the next bucket search for a non-empty bucket.
+                // I may be going out of bounds here but seek() can handle
+                // that. Also, if seek() cannot find another non-empty bucket
+                // then bucket_iter == bucket_end still holds which makes this
+                // iterator compare positive against end(). If so, then this
+                // iterator is invalid and incrementing yields undefined
+                // behaviour.
+                ++table_index;
+                seek();
             }
             return *this;
         }
     };
 
-    iterator begin() { return iterator(*this, 0); }
-    iterator end() { return iterator(*this, mBucketCount.get_ro()); }
+    iterator begin() { return iterator(mBuckets, mBucketCount); }
+    iterator end() { return iterator(); }
 
 // ############################################################################
 // PRIVATE API

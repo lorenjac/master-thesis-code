@@ -97,6 +97,9 @@ void execCommand(midas::store& store, const command& pack)
             std::cout << GREEN << "commit successful!" << RESET << std::endl;
         }
     }
+    else if(cmd == "p") {
+        store.print();
+    }
     else {
         std::cout << "error: unknown command or missing arguments!\n";
         std::cout << "  cmd: " << cmd << '\n';
