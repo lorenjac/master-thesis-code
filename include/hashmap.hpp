@@ -205,7 +205,7 @@ public:
     }
 
     /**
-     * Removes a key-value pair.
+     * Removes a key-value pair with the given key (if any).
      *
      * If there exists no pair with the same key then this function has no
      * effect and returns false.
@@ -216,7 +216,7 @@ public:
      * Returns true if the given pair was removed successfully.
      */
     template <class pool_type>
-    bool remove(const volatile_key& key, pmdk::pool<pool_type>& pool)
+    bool erase(const volatile_key& key, pmdk::pool<pool_type>& pool)
     {
         // Return if there are no buckets yet
         if (!mBuckets)
@@ -226,22 +226,28 @@ public:
         auto& bucket = mBuckets[hash(key)];
 
         // Find and remove pair with the given key
-        size_type pos = 0;
-        bool found = false;
-        for (const auto& elem : bucket) {
-            if (elem->key.get_ro() == key) {
+        const auto end = bucket.end();
+        for (auto it = bucket.begin(); it != end; ++it) {
+            if ((*it)->key.get_ro() == key) {
                 pmdk::transaction::exec_tx(pool, [&,this](){
-                    bucket.erase(pos, pool); // TODO use iterator variant
+                    bucket.erase(it, pool);
                     --mElemCount.get_rw();
                 });
-                found = true;
-                break;
+                return true;
             }
-            ++pos;
         }
-        return found;
+        return false;
     }
 
+    /**
+     * Removes key-value pair at the position of the iterator.
+     *
+     * If the iterator is valid, then the addressed key-value pair is removed
+     * and an iterator to the next element (if any) is returned. Otherwise,
+     * this method has no effect and returns the given iterator unaltered.
+     *
+     * Returns incremented iterator if iterator is valid, identity otherwise.
+     */
     template <class pool_type>
     iterator erase(iterator& it, pmdk::pool<pool_type>& pool)
     {
@@ -346,7 +352,7 @@ public:
             , bucket_end{}
         {}
 
-        iterator(pmdk::persistent_ptr<bucket_type[]> table, 
+        iterator(pmdk::persistent_ptr<bucket_type[]> table,
                 size_type table_size)
             : table(table)
             , table_size(table_size)
@@ -354,9 +360,6 @@ public:
             , bucket_iter{}
             , bucket_end{}
         {
-            if (!table)
-                table_size = 0;
-
             seek();
         }
 

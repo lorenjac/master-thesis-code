@@ -205,7 +205,7 @@ void launch(pool_t& pool, const std::string& cmd, const std::string& arg1,
     else if (cmd == "del" && !arg1.empty()) {
 
         auto key = arg1;
-        auto status = map->remove(key, pool);
+        auto status = map->erase(key, pool);
         if (status)
             std::cout << GREEN << "success" << RESET << std::endl;
         else
