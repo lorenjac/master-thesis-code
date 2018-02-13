@@ -162,7 +162,7 @@ public:
             new_pair->value = value;
 
             // Add the new pair to the bucket
-            bucket.append(new_pair, pool);
+            bucket.push_back(new_pair, pool);
             ++mElemCount.get_rw();
         });
 
@@ -482,7 +482,7 @@ private:
                 auto& bucket = mBuckets[i];
                 while (!bucket.empty()) {
                     auto new_pos = hash(bucket.get(0)->key.get_ro(), dest_size);
-                    dest[new_pos].append_from(bucket, 0, pool);
+                    dest[new_pos].push_back_from(bucket, 0, pool);
                 }
             }
         });

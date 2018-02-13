@@ -83,11 +83,11 @@ void launch(pool_t& pool, const std::string& cmd, const std::string& arg)
 
         // *** FOR POINTERS
         pm::transaction::exec_tx(pool, [&](){
-            list->append(pm::make_persistent<int>(std::stoi(arg)), pool);
+            list->push_back(pm::make_persistent<int>(std::stoi(arg)), pool);
         });
 
         // *** FOR PRIMITIVES
-        // list->append(std::stoi(arg), pool);
+        // list->push_back(std::stoi(arg), pool);
     }
     else if (cmd == "get" && !arg.empty()) {
         const auto result = list->get(std::stoi(arg));

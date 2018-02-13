@@ -138,12 +138,32 @@ public:
      * Add an element at the back of this list.
      */
     template <class pool_type>
-    void append(const elem_type& elem, pmdk::pool<pool_type>& pool)
+    void push_back(const elem_type& elem, pmdk::pool<pool_type>& pool)
     {
         pmdk::transaction::exec_tx(pool, [&,this](){
             auto new_node = pmdk::make_persistent<node>();
             new_node->mValue = elem;
-            append(new_node);
+            push_back(new_node);
+        });
+    }
+
+    /**
+     * Add an element at the back of this list.
+     */
+    template <class pool_type>
+    void push_front(const elem_type& elem, pmdk::pool<pool_type>& pool)
+    {
+        pmdk::transaction::exec_tx(pool, [&,this](){
+            auto new_node = pmdk::make_persistent<node>();
+            new_node->mValue = elem;
+            if (mHead) {
+                new_node->mNext = mHead; // head becomes successor of new node
+                mHead->mPrev = new_node; // new node becomes predecessor of head
+            }
+            else {
+                mTail = new_node;
+            }
+            mHead = new_node;
         });
     }
 
@@ -156,7 +176,7 @@ public:
      * Fails, if the specified index is invalid in the other list.
      */
     template <class pool_type>
-    void append_from(this_type& other, const size_type pos,
+    void push_back_from(this_type& other, const size_type pos,
             pmdk::pool<pool_type>& pool)
     {
         // Fail if index is invalid
@@ -171,7 +191,7 @@ public:
         // Unlink specified node from other list and append it to this list
         pmdk::transaction::exec_tx(pool, [&,this](){
             auto unlinked_node = other.unlink(it);
-            append(unlinked_node);
+            push_back(unlinked_node);
         });
     }
 
@@ -360,7 +380,7 @@ private:
      *
      * Also increases the item count.
      */
-    void append(pmdk::persistent_ptr<node> node)
+    void push_back(pmdk::persistent_ptr<node> node)
     {
         if (mHead) {
             mTail->mNext = node;
@@ -392,7 +412,7 @@ private:
 
             // Invalidate tail if list has become empty (head=null)
             // Not strictly required (mTail is never read until it is
-            // overwritten when re-populated in append().
+            // overwritten when re-populated in push_back().
             if (!mHead)
                 mTail = nullptr;
 
