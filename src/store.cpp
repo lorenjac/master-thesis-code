@@ -652,7 +652,6 @@ bool store::installVersions(transaction::ptr tx)
 
             // Add new version to item history
             history->mutex.lock();
-            // TODO make scans faster by inserting at the front
             history->chain.push_front(new_version, pop);
             history->mutex.unlock();
         }
