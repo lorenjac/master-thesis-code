@@ -35,6 +35,34 @@ listTest : makeDir
 hashTest : makeDir
 	$(CC) $(CFLAGS) $(INCLUDE) $(TEST_DIR)/$@.cpp $(LDFLAGS) -o $(BIN_DIR)/$@
 
+dirtyRead : makeDir base
+	$(CC) -c $(CFLAGS) $(INCLUDE) $(TEST_DIR)/$@.cpp -o $(BIN_DIR)/$@.o
+	$(CC) $(CFLAGS) $(BIN_DIR)/*.o $(LDFLAGS) -o $(BIN_DIR)/$@
+
+fuzzyRead : makeDir base
+	$(CC) -c $(CFLAGS) $(INCLUDE) $(TEST_DIR)/$@.cpp -o $(BIN_DIR)/$@.o
+	$(CC) $(CFLAGS) $(BIN_DIR)/*.o $(LDFLAGS) -o $(BIN_DIR)/$@
+
+lostUpdate1 : makeDir base
+	$(CC) -c $(CFLAGS) $(INCLUDE) $(TEST_DIR)/$@.cpp -o $(BIN_DIR)/$@.o
+	$(CC) $(CFLAGS) $(BIN_DIR)/*.o $(LDFLAGS) -o $(BIN_DIR)/$@
+
+lostUpdate2 : makeDir base
+	$(CC) -c $(CFLAGS) $(INCLUDE) $(TEST_DIR)/$@.cpp -o $(BIN_DIR)/$@.o
+	$(CC) $(CFLAGS) $(BIN_DIR)/*.o $(LDFLAGS) -o $(BIN_DIR)/$@
+
+writeSkew : makeDir base
+	$(CC) -c $(CFLAGS) $(INCLUDE) $(TEST_DIR)/$@.cpp -o $(BIN_DIR)/$@.o
+	$(CC) $(CFLAGS) $(BIN_DIR)/*.o $(LDFLAGS) -o $(BIN_DIR)/$@
+
+badTiming : makeDir base
+	$(CC) -c $(CFLAGS) $(INCLUDE) $(TEST_DIR)/$@.cpp -o $(BIN_DIR)/$@.o
+	$(CC) $(CFLAGS) $(BIN_DIR)/*.o $(LDFLAGS) -o $(BIN_DIR)/$@
+
+base :
+	$(CC) -c $(CFLAGS) $(INCLUDE) $(SRC_DIR)/store.cpp -o $(BIN_DIR)/store.o
+	$(CC) -c $(CFLAGS) $(INCLUDE) $(SRC_DIR)/string.cpp -o $(BIN_DIR)/string.o
+
 makeDir :
 	mkdir -p $(BIN_DIR)
 	cd $(BIN_DIR)

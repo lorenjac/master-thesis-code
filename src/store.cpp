@@ -207,6 +207,8 @@ int store::abort(transaction::ptr tx, int reason)
     // Undo all changes carried out by tx
     rollback(tx);
 
+    tx_tab.erase(tx->getId());
+
     // return the specified error code (supplied by the caller)
     return reason;
 }
@@ -324,13 +326,18 @@ int store::write(transaction::ptr tx, const key_type& key, const mapped_type& va
         return _insert(tx, key, value);
 
     history->mutex.lock();
+
+    // FIXME distinguish between no _valid_ versions (insert OK!) and no _accessible_ versions (W/W conflict!)
+
     if (has_valid_entries(history)) {
 
         std::cout << "write(): history exists and as valid entries" << std::endl;
 
         detail::version::ptr candidate = getVersionW(history, tx);
-        if (!candidate)
+        if (!candidate) {
+            history->mutex.unlock();
             return abort(tx, VALUE_NOT_FOUND);
+        }
 
         // Mark version as temporary-invalid
         pmdk::transaction::exec_tx(pop, [&,this](){
@@ -349,7 +356,7 @@ int store::write(transaction::ptr tx, const key_type& key, const mapped_type& va
         });
     }
     else {
-        std::cout << "write(): no history or no valid entries" << std::endl;
+        std::cout << "write(): no valid entries" << std::endl;
 
         history->mutex.unlock();
         return _insert(tx, key, value);
@@ -420,8 +427,10 @@ int store::drop(transaction::ptr tx, const key_type& key)
     // make sure that no one else can modify it.
     history->mutex.lock();
     auto candidate = getVersionW(history, tx);
-    if (!candidate)
+    if (!candidate) {
+        history->mutex.unlock();
         return abort(tx, VALUE_NOT_FOUND);
+    }
 
     // Tentatively invalidate V with our tx id
     pmdk::transaction::exec_tx(pop, [&,this](){
@@ -441,6 +450,7 @@ int store::drop(transaction::ptr tx, const key_type& key)
 detail::version::ptr store::getVersionW(detail::history::ptr& history, transaction::ptr tx)
 {
     std::cout << "store::getVersionW(tx{id=" << tx->getId() << "}):" << '\n';
+
     for (auto& v : history->chain) {
         if (isWritable(v, tx))
             return v;
@@ -451,6 +461,7 @@ detail::version::ptr store::getVersionW(detail::history::ptr& history, transacti
 detail::version::ptr store::getVersionR(detail::history::ptr& history, transaction::ptr tx)
 {
     std::cout << "store::getVersionR(tx{id=" << tx->getId() << "}):" << '\n';
+
     for (auto& v : history->chain) {
         if (isReadable(v, tx))
             return v;
