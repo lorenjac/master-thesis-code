@@ -1,9 +1,7 @@
-#include <experimental/filesystem>
 #include <iostream>
 #include <string>
 
-#include "store.hpp"
-#include "store_init.hpp"
+#include "midas.hpp"
 
 namespace app {
 
@@ -12,7 +10,7 @@ namespace app {
 // const std::string RED = "\033[0;31m";
 // const std::string CYAN = "\033[1;36m";
 
-void launch(midas::pool_type& pop)
+void launch(midas::pop_type& pop)
 {
     midas::store store{pop};
 
@@ -25,7 +23,7 @@ int main(int argc, char* argv[])
 {
     const std::string file{"/tmp/nvm"};
     const std::size_t size = 64ULL * 1024 * 1024; // 64 MB
-    midas::pool_type pop;
+    midas::pop_type pop;
 
     if (midas::init(pop, file, size)) {
         app::launch(pop);

@@ -21,7 +21,7 @@ namespace pmdk = pmem::obj;
 class hasher {
 public:
     using volatile_key_type = std::string;
-    using persistent_key_type = util::string;
+    using persistent_key_type = string;
     using result_type = std::size_t;
 
     static result_type hash(const volatile_key_type& key) {
@@ -49,16 +49,16 @@ private:
 // ############################################################################
 
 struct config {
-    using size_type = util::hashmap_config::size_type;
-    using float_type = util::hashmap_config::float_type;
+    using size_type = hashmap_config::size_type;
+    using float_type = hashmap_config::float_type;
 
     static constexpr size_type INIT_SIZE = 4;
     static constexpr size_type GROW_FACTOR = 2;
     static constexpr float_type MAX_LOAD_FACTOR = 0.75;
 };
 
-}
-}
-}
+} // end namespace index
+} // end namespace detail
+} // end namespace midas
 
 #endif

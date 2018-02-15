@@ -11,7 +11,8 @@
 #include <libpmemobj++/transaction.hpp>
 #include <libpmemobj++/p.hpp>
 
-namespace util {
+namespace midas {
+namespace detail {
 
 namespace pmdk = pmem::obj;
 
@@ -438,6 +439,7 @@ private:
 
 }; // end class list
 
-} // end namespace util
+} // end namespace detail
+} // end namespace midas
 
 #endif

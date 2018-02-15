@@ -15,7 +15,8 @@
 #include "list.hpp"
 #include "string.hpp"
 
-namespace util {
+namespace midas {
+namespace detail {
 
 namespace pmdk = pmem::obj;
 
@@ -489,6 +490,7 @@ private:
     }
 }; // end class hashmap
 
-} // end namespace util
+} // end namespace detail
+} // end namespace midas
 
 #endif

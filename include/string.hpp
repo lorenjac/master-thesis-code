@@ -13,7 +13,8 @@
 #include <libpmemobj++/persistent_ptr.hpp>
 #include <libpmemobj++/p.hpp>
 
-namespace util {
+namespace midas {
+namespace detail {
 
 namespace pmdk = pmem::obj;
 
@@ -169,6 +170,7 @@ struct string
 
 std::ostream& operator<<(std::ostream& os, const string& str);
 
-} // end namespace util
+} // end namespace detail
+} // end namespace midas
 
 #endif

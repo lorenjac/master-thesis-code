@@ -1,8 +1,10 @@
 #include "store.hpp"
 
-#include <memory>
+#include <experimental/filesystem>  // std::exists
+#include <memory> // std::make_shared
 
 namespace midas {
+namespace detail {
 
 // ############################################################################
 // PUBLIC API
@@ -107,7 +109,7 @@ int store::read(transaction::ptr tx, const key_type& key, mapped_type& result)
 
     // Look up data item. Abort if key does not exist.
     index_mutex.lock();
-    detail::history::ptr history;
+    history::ptr history;
     auto status = index->get(key, history);
     index_mutex.unlock();
     if (!status) {
@@ -162,7 +164,7 @@ int store::write(transaction::ptr tx, const key_type& key, const mapped_type& va
     // std::cout << "write(): item not in change set" << std::endl;
 
     index_mutex.lock();
-    detail::history::ptr history;
+    history::ptr history;
     index->get(key, history);
     index_mutex.unlock();
 
@@ -170,7 +172,7 @@ int store::write(transaction::ptr tx, const key_type& key, const mapped_type& va
         return insert(tx, key, value);
 
     history->mutex.lock();
-    detail::version::ptr candidate = getWritableSnapshot(history, tx);
+    version::ptr candidate = getWritableSnapshot(history, tx);
     if (!candidate) {
         auto hasValidVersions = hasValidSnapshots(history);
         history->mutex.unlock();
@@ -238,7 +240,7 @@ int store::drop(transaction::ptr tx, const key_type& key)
     }
 
     // Look up history of data item. Abort if key does not exist.
-    detail::history::ptr history;
+    history::ptr history;
     index_mutex.lock();
     auto status = index->get(key, history);
     index_mutex.unlock();
@@ -329,7 +331,7 @@ void store::init()
                 // Purge left history empty, so we should remove it from
                 // the index and deallocate it
                 it = index->erase(it, pop);
-                pmdk::delete_persistent<detail::history>(hist);
+                pmdk::delete_persistent<history>(hist);
             }
             else {
                 // Release the lock on the current history, as it may have become
@@ -346,7 +348,7 @@ void store::init()
     timestampCounter.fetch_add(TS_DELTA);
 }
 
-void store::purgeHistory(detail::history::ptr& history)
+void store::purgeHistory(history::ptr& history)
 {
     const auto first_stamp = timestampCounter.load();
     auto& chain = history->chain;
@@ -358,7 +360,7 @@ void store::purgeHistory(detail::history::ptr& history)
             // never committed or failed to finalize timestamps.
             // Therefore, we have to delete V.
             it = chain.erase(it, pop);
-            pmdk::delete_persistent<detail::version>(v);
+            pmdk::delete_persistent<version>(v);
         }
         else if (v->end == TS_INFINITY) {
             // V was valid before restart. Make it look like it was
@@ -379,7 +381,7 @@ void store::purgeHistory(detail::history::ptr& history)
             // V was invalidated and the associated transaction
             // has committed so we do not need V anymore.
             it = chain.erase(it, pop);
-            pmdk::delete_persistent<detail::version>(v);
+            pmdk::delete_persistent<version>(v);
         }
     }
 }
@@ -395,7 +397,7 @@ int store::insert(transaction::ptr tx, const key_type& key, const mapped_type& v
     return OK;
 }
 
-detail::version::ptr store::getWritableSnapshot(detail::history::ptr& history, transaction::ptr tx)
+version::ptr store::getWritableSnapshot(history::ptr& history, transaction::ptr tx)
 {
     // std::cout << "store::getWritableSnapshot(tx{id=" << tx->getId() << "}):" << '\n';
 
@@ -406,7 +408,7 @@ detail::version::ptr store::getWritableSnapshot(detail::history::ptr& history, t
     return nullptr;
 }
 
-detail::version::ptr store::getReadableSnapshot(detail::history::ptr& history, transaction::ptr tx)
+version::ptr store::getReadableSnapshot(history::ptr& history, transaction::ptr tx)
 {
     // std::cout << "store::getReadableSnapshot(tx{id=" << tx->getId() << "}):" << '\n';
 
@@ -417,7 +419,7 @@ detail::version::ptr store::getReadableSnapshot(detail::history::ptr& history, t
     return nullptr;
 }
 
-bool store::isReadable(detail::version::ptr& v, transaction::ptr tx)
+bool store::isReadable(version::ptr& v, transaction::ptr tx)
 {
     // Read begin/end fields
     auto v_begin = v->begin;
@@ -478,7 +480,7 @@ bool store::isReadable(detail::version::ptr& v, transaction::ptr tx)
     return true;
 }
 
-bool store::isWritable(detail::version::ptr& v, transaction::ptr tx)
+bool store::isWritable(version::ptr& v, transaction::ptr tx)
 {
     auto v_begin = v->begin;
     auto v_end = v->end.load();
@@ -554,7 +556,7 @@ bool store::persist(transaction::ptr tx)
                 continue;
 
             // Create new version
-            auto new_version = pmdk::make_persistent<detail::version>();
+            auto new_version = pmdk::make_persistent<version>();
             new_version->begin = tid;
             new_version->data = change.delta;
             new_version->end = TS_INFINITY;
@@ -563,7 +565,7 @@ bool store::persist(transaction::ptr tx)
             change.v_new = new_version;
 
             // Get history of version (create if needed)
-            detail::history::ptr history;
+            history::ptr history;
             if (change.code == transaction::Mod::Kind::Update) {
                 index_mutex.lock();
                 index->get(key, history);
@@ -571,7 +573,7 @@ bool store::persist(transaction::ptr tx)
             }
             else if (change.code == transaction::Mod::Kind::Insert) {
 
-                detail::history::ptr exist_hist;
+                history::ptr exist_hist;
 
                 // Handle ww-conflict when installing insertions. If another
                 // transaction managed to insert a history for the same key
@@ -604,7 +606,7 @@ bool store::persist(transaction::ptr tx)
             }
 
             if (!success) {
-                pmdk::delete_persistent<detail::version>(new_version);
+                pmdk::delete_persistent<version>(new_version);
                 change.v_new = nullptr;
                 return;
             }
@@ -738,7 +740,7 @@ bool store::isValidTransaction(const transaction::ptr tx)
             tx->getStatus().load() == transaction::ACTIVE);
 }
 
-bool store::hasValidSnapshots(const detail::history::ptr& hist)
+bool store::hasValidSnapshots(const history::ptr& hist)
 {
     for (auto& v : hist->chain) {
         auto v_end = v->end.load();
@@ -753,4 +755,29 @@ bool store::isTransactionId(const stamp_type data)
     return data & 1;
 }
 
+bool init(store::pool_type& pop, std::string file, size_type pool_size)
+{
+    namespace filesystem = std::experimental::filesystem::v1;
+    using pool_type = store::pool_type;
+    using index_type = store::index_type;
+
+    const std::string layout{"midas"};
+    if (filesystem::exists(file)) {
+        if (pool_type::check(file, layout) != 1) {
+            std::cout << "File seems to be corrupt! Aborting..." << std::endl;
+            return false;
+        }
+        pop = pool_type::open(file, layout);
+    }
+    else {
+        pop = pool_type::create(file, layout, pool_size);
+        auto root = pop.get_root();
+        pmdk::transaction::exec_tx(pop, [&](){
+            root->index = pmdk::make_persistent<index_type>();
+        });
+    }
+    return true;
+}
+
+} // end namespace detail
 } // end namespace midas

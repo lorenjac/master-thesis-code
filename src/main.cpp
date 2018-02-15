@@ -1,20 +1,17 @@
-#include <experimental/filesystem>
-#include <iostream>
-#include <sstream>
-#include <algorithm>
-#include <iterator>
-#include <string>
-#include <tuple>
+#include <iostream>     // std::cout, std::cin, std::endl
+#include <sstream>      // std::istringstream
+#include <iterator>     // std::istream_iterator
+#include <string>       // std::string
+#include <tuple>        // std::tuple
 
-#include "store.hpp"
-
-namespace fs = std::experimental::filesystem::v1;
-namespace pm = pmem::obj;
+#include "midas.hpp"
 
 namespace app {
 
 using pool_type = midas::store::pool_type;
 using command = std::tuple<std::string, std::string, std::string>;
+
+const std::size_t POOL_SIZE = 64ULL * 1024 * 1024; // 64 MB
 
 const std::string RESET = "\033[0m";
 const std::string GREEN = "\033[0;32m";
@@ -153,15 +150,11 @@ void launch(pool_type& pop, const command& pack)
         execCommand(store, pack);
     }
 } // end function launch
-
 } // end namespace app
 
 int main(int argc, char* argv[])
 {
-    using pool_type = midas::store::pool_type;
-
     std::string file{"/tmp/nvm"};
-    // std::string file{argv[1]};
     std::string cmd, arg1, arg2;
     if (argc > 1)
         cmd = argv[1];
@@ -170,29 +163,13 @@ int main(int argc, char* argv[])
     if (argc > 3)
         arg2 = argv[3];
 
-    if (cmd == "h" || cmd == "-h" || cmd == "help" || cmd == "-help") {
-        app::usage();
-        return 0;
-    }
-
-    const std::string layout{"index"};
-    const std::size_t pool_size = 64ULL * 1024 * 1024; // 64 MB
-    pool_type pop;
-    if (fs::exists(file)) {
-        if (pool_type::check(file, layout) != 1) {
-            std::cout << "File seems to be corrupt! Aborting..." << std::endl;
-            return 0;
-        }
-        pop = pool_type::open(file, layout);
+    app::pool_type pop;
+    if (midas::init(pop, file, app::POOL_SIZE)) {
+        app::launch(pop, std::make_tuple(cmd, arg1, arg2));
+        pop.close();
     }
     else {
-        pop = pool_type::create(file, layout, pool_size);
-        auto root = pop.get_root();
-        pm::transaction::exec_tx(pop, [&](){
-            root->index = pm::make_persistent<midas::store::index_type>();
-        });
+        std::cout << "error: could not open file <" << file << ">!\n";
     }
-    app::launch(pop, std::make_tuple(cmd, arg1, arg2));
-    pop.close();
     return EXIT_SUCCESS;
 }

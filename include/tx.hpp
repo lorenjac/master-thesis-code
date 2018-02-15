@@ -10,6 +10,7 @@
 #include "version.hpp"
 
 namespace midas {
+namespace detail {
 
 class transaction {
 public:
@@ -26,9 +27,9 @@ public:
         };
 
         Kind                    code;
-        detail::version::ptr    v_origin; // nullptr if code == Insert
+        version::ptr    v_origin; // nullptr if code == Insert
         value_type              delta;   // empty if code == Remove
-        detail::version::ptr    v_new; // nullptr if code == Remove
+        version::ptr    v_new; // nullptr if code == Remove
     };
 
     using delta_type = std::unordered_map<key_type, Mod>;
@@ -81,6 +82,7 @@ public:
 
 }; // end class transaction
 
+} // end namespace detail
 } // end namespace midas
 
 #endif

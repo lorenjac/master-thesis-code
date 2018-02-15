@@ -1,4 +1,4 @@
-#include <experimental/filesystem>
+
 #include <iostream>
 #include <string>
 
@@ -9,7 +9,8 @@
 namespace fs = std::experimental::filesystem::v1;
 namespace pm = pmem::obj;
 
-namespace util {
+namespace midas {
+namespace detail {
 
 std::ostream& operator<<(std::ostream& os, const string& str)
 {
@@ -23,8 +24,13 @@ std::ostream& operator<<(std::ostream& os, const string& str)
 }
 
 }
+}
 
 namespace app {
+
+    using midas::detail::string;
+    using midas::detail::hashmap;
+    using midas::detail::hashmap_config;
 
 // ############################################################################
 // Controls how volatile keys are mapped to persistent keys append ensures that
@@ -34,7 +40,7 @@ namespace app {
 class my_string_hasher {
 public:
     using volatile_key_type = std::string;
-    using persistent_key_type = util::string;
+    using persistent_key_type = string;
     using result_type = std::size_t;
 
     static result_type hash(const volatile_key_type& key) {
@@ -64,7 +70,7 @@ private:
 // struct history {
 //     using elem_type = pm::persistent_ptr<int>;
 //
-//     pm::p<util::list<elem_type>> chain;
+//     pm::p<list<elem_type>> chain;
 //     bool lock;
 //
 //     history()
@@ -81,8 +87,8 @@ using value_type = int;
 // ############################################################################
 
 struct my_hashmap_config {
-    using size_type = util::hashmap_config::size_type;
-    using float_type = util::hashmap_config::float_type;
+    using size_type = hashmap_config::size_type;
+    using float_type = hashmap_config::float_type;
 
     static constexpr size_type INIT_SIZE = 4;
     static constexpr size_type GROW_FACTOR = 2;
@@ -94,7 +100,7 @@ struct my_hashmap_config {
 // ############################################################################
 
 using mapped_type = pm::persistent_ptr<value_type>;
-using map_t = util::hashmap<
+using map_t = hashmap<
     my_string_hasher,
     mapped_type,
     my_hashmap_config

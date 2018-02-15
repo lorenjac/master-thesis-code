@@ -18,7 +18,7 @@ struct history {
     using ptr = pmdk::persistent_ptr<history>;
     using elem_type = version::ptr;
 
-    util::list<elem_type> chain;
+    list<elem_type> chain;
 
     // Synchronizes access to this history
     // Reset on restart!
@@ -30,7 +30,7 @@ struct history {
     {}
 };
 
-}
-}
+} // end namespace detail
+} // end namespace midas
 
 #endif

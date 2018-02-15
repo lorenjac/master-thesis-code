@@ -1,6 +1,7 @@
 #include "string.hpp"
 
-namespace util {
+namespace midas {
+namespace detail {
 
 std::ostream& operator<<(std::ostream& os, const string& str)
 {
@@ -13,4 +14,5 @@ std::ostream& operator<<(std::ostream& os, const string& str)
     return os;
 }
 
-}
+} // end namespace detail
+} // end namespace midas

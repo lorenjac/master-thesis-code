@@ -29,7 +29,7 @@ struct version {
     std::atomic<stamp_type> end;
 
     // payload of this version
-    util::string data;
+    string data;
 
     version()
         : begin{}
@@ -38,7 +38,7 @@ struct version {
     {}
 };
 
-}
-}
+} // end namespace detail
+} // end namespace midas
 
 #endif

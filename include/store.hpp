@@ -15,6 +15,7 @@
 #include "tx.hpp"
 
 namespace midas {
+namespace detail {
 
 namespace pmdk = pmem::obj;
 
@@ -30,9 +31,9 @@ public:
     using mapped_type = std::string;
 
     using tx_table_type = cuckoohash_map<id_type, transaction::ptr>;
-    using index_type = util::hashmap<detail::index::hasher,
-                                     detail::history::ptr,
-                                     detail::index::config>;
+    using index_type = hashmap<index::hasher,
+                               history::ptr,
+                               index::config>;
 
     struct root {
         pmdk::persistent_ptr<index_type> index;
@@ -112,13 +113,13 @@ public:
 private:
 
     void init();
-    void purgeHistory(detail::history::ptr& history);
+    void purgeHistory(history::ptr& history);
 
     int insert(transaction::ptr tx, const key_type& key, const mapped_type& value);
-    detail::version::ptr getWritableSnapshot(detail::history::ptr& history, transaction::ptr tx);
-    detail::version::ptr getReadableSnapshot(detail::history::ptr& history, transaction::ptr tx);
-    bool isWritable(detail::version::ptr& v, transaction::ptr tx);
-    bool isReadable(detail::version::ptr& v, transaction::ptr tx);
+    version::ptr getWritableSnapshot(history::ptr& history, transaction::ptr tx);
+    version::ptr getReadableSnapshot(history::ptr& history, transaction::ptr tx);
+    bool isWritable(version::ptr& v, transaction::ptr tx);
+    bool isReadable(version::ptr& v, transaction::ptr tx);
     bool validate(transaction::ptr tx);
     void rollback(transaction::ptr tx);
     void finalize(transaction::ptr tx);
@@ -130,7 +131,7 @@ private:
      * Tests whether the given history contains at least one
      * version that is not permanently invalidated.
      */
-    bool hasValidSnapshots(const detail::history::ptr& hist);
+    bool hasValidSnapshots(const history::ptr& hist);
 
     /**
      * Tests whether the given value is a transaction id.
@@ -138,6 +139,9 @@ private:
     inline bool isTransactionId(const stamp_type data);
 };
 
-}
+bool init(store::pool_type& pop, std::string file, size_type pool_size);
+
+} // end namespace detail
+} // end namespace midas
 
 #endif

@@ -1,4 +1,4 @@
-#include <experimental/filesystem>
+
 #include <iostream>
 #include <string>
 
@@ -8,6 +8,8 @@ namespace fs = std::experimental::filesystem::v1;
 namespace pm = pmem::obj;
 
 namespace app {
+
+    using midas::detail::list;
 
 // CONSTANTS
 
@@ -22,7 +24,7 @@ using elem_type = pm::persistent_ptr<int>;
 // *** FOR PRIMITIVES
 // using elem_type = pm::p<int>;
 
-using list_t = util::list<elem_type>;
+using list_t = list<elem_type>;
 
 struct root_t {
     pm::persistent_ptr<list_t> list;
