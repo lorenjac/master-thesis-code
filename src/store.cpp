@@ -28,15 +28,17 @@ transaction::status_code store::get_tx_status(const id_type id)
 bool store::has_valid_entries(const detail::history::ptr& hist)
 {
     for (auto& v : hist->chain) {
-        auto v_begin = v->begin;
+        // auto v_begin = v->begin;
         auto v_end = v->end.load();
-        if (is_tx_id(v_end) && get_tx_status(v_end) == transaction::FAILED) {
+        // if (is_tx_id(v_end) && get_tx_status(v_end) == transaction::FAILED) {
+        //     return true;
+        // }
+        // else if (v_end == INF && (!is_tx_id(v_begin) ||
+        //         get_tx_status(v_begin) == transaction::COMMITTED)) {
+        //     return true;
+        // }
+        if (v_end == INF || is_tx_id(v_end))
             return true;
-        }
-        else if (v_end == INF && (!is_tx_id(v_begin) ||
-                get_tx_status(v_begin) == transaction::COMMITTED)) {
-            return true;
-        }
     }
     return false;
 }
@@ -326,41 +328,32 @@ int store::write(transaction::ptr tx, const key_type& key, const mapped_type& va
         return _insert(tx, key, value);
 
     history->mutex.lock();
-
-    // FIXME distinguish between no _valid_ versions (insert OK!) and no _accessible_ versions (W/W conflict!)
-
-    if (has_valid_entries(history)) {
-
-        std::cout << "write(): history exists and as valid entries" << std::endl;
-
-        detail::version::ptr candidate = getVersionW(history, tx);
-        if (!candidate) {
-            history->mutex.unlock();
-            return abort(tx, VALUE_NOT_FOUND);
-        }
-
-        // Mark version as temporary-invalid
-        pmdk::transaction::exec_tx(pop, [&,this](){
-            candidate->end.store(tx->getId());
-        });
-
-        // Let others enter the history
+    detail::version::ptr candidate = getVersionW(history, tx);
+    if (!candidate) {
+        auto hasValidVersions = has_valid_entries(history);
         history->mutex.unlock();
 
-        // Update changeset of tx
-        tx->getChangeSet().emplace(key, transaction::Mod{
-            transaction::Mod::Kind::Update,
-            candidate,
-            value,
-            nullptr
-        });
-    }
-    else {
-        std::cout << "write(): no valid entries" << std::endl;
+        if (!hasValidVersions)
+            return _insert(tx, key, value);
 
-        history->mutex.unlock();
-        return _insert(tx, key, value);
+        return abort(tx, VALUE_NOT_FOUND);
     }
+
+    // Mark version as temporary-invalid
+    pmdk::transaction::exec_tx(pop, [&,this](){
+        candidate->end.store(tx->getId());
+    });
+
+    // Let others enter the history
+    history->mutex.unlock();
+
+    // Update changeset of tx
+    tx->getChangeSet().emplace(key, transaction::Mod{
+        transaction::Mod::Kind::Update,
+        candidate,
+        value,
+        nullptr
+    });
     return OK;
 }
 
@@ -694,10 +687,19 @@ void store::finalizeStamps(transaction::ptr tx)
 
             case transaction::Mod::Kind::Update:
                 change.v_new->begin = tx_end_stamp;
+
+                // Note: No test-and-set is required here because, as opposed
+                // to rollbacks, no one is going to try and acquire ownership
+                // on this version because it is actually outdated. During
+                // rollbacks, versions are known to have been touched by a 
+                // failed transaction, so they are writable already when
+                // a rollback starts. When finalizing a commit, versions
+                // are not writable anymore, so no care must be taken.
                 change.v_origin->end.store(tx_end_stamp);
                 break;
 
             case transaction::Mod::Kind::Remove:
+                // See note above.
                 change.v_origin->end.store(tx_end_stamp);
                 break;
             }
