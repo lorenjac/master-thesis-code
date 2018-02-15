@@ -23,13 +23,12 @@ const std::string CYAN = "\033[1;36m";
 
 void usage()
 {
-    std::cout << "Commands:\n";
+    std::cout << "Commands:\n\n";
     std::cout << "  w KEY VALUE     Inserts or updates the specified pair\n";
     std::cout << "  r KEY           Retrieves the value associated with they key (if any)\n";
     std::cout << "  d KEY           Removes the pair with the given key (if any)\n";
-    std::cout << "\nNote: This is an early alpha and still very buggy\n";
-    std::cout << "\nKnown bugs:\n";
-    std::cout << "  * after deleting a pair, it cannot be inserted again\n";
+    std::cout << "  p               Prints the database with complete histories\n";
+    std::cout << std::endl;
 }
 
 void execCommand(midas::store& store, const command& pack)
@@ -97,14 +96,17 @@ void execCommand(midas::store& store, const command& pack)
             std::cout << GREEN << "commit successful!" << RESET << std::endl;
         }
     }
-    else if(cmd == "p") {
+    else if (cmd == "p") {
         store.print();
+    }
+    else if (cmd == "h" || cmd == "-h" || cmd == "help") {
+        usage();
     }
     else {
         std::cout << "error: unknown command or missing arguments!\n";
-        std::cout << "  cmd: " << cmd << '\n';
-        std::cout << "  key: " << key << '\n';
-        std::cout << "  val: " << value << '\n';
+        std::cout << "  cmd : " << cmd << '\n';
+        std::cout << "  arg1: " << key << '\n';
+        std::cout << "  arg2: " << value << "\n\n";
         usage();
     }
 }
@@ -181,20 +183,14 @@ int main(int argc, char* argv[])
             std::cout << "File seems to be corrupt! Aborting..." << std::endl;
             return 0;
         }
-        std::cout << "File seems to be OK!\n";
-        std::cout << "Opening... ";
         pop = pool_type::open(file, layout);
-        std::cout << "OK\n";
     }
     else {
-        std::cout << "File does not exist! Creating... "  << std::endl;
         pop = pool_type::create(file, layout, pool_size);
-        std::cout << "Root created! Initializing... " << std::endl;
         auto root = pop.get_root();
         pm::transaction::exec_tx(pop, [&](){
             root->index = pm::make_persistent<midas::store::index_type>();
         });
-        std::cout << "OK\n";
     }
     app::launch(pop, std::make_tuple(cmd, arg1, arg2));
     pop.close();

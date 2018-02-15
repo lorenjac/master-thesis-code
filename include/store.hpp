@@ -18,8 +18,6 @@ namespace midas {
 
 namespace pmdk = pmem::obj;
 
-struct root;
-
 class store
 {
 // ############################################################################
@@ -50,14 +48,27 @@ public:
         VALUE_NOT_FOUND = 404
     };
 
+    /**
+     * Infinity timestamp. Used in end timestamp fields to mark versions as valid.
+     */
+    enum : stamp_type
+    {
+        INFINITY = std::numeric_limits<stamp_type>::max() - 1,
+        TS_DELTA = 2,
+        TS_START = 2,
+        ID_START = 1,
+        TS_ZERO = 0
+    };
+
 // ############################################################################
 // MEMBER VARIABLES
 // ############################################################################
 
 private:
+    // Persistent object pool
     pool_type&      pop;
 
-    // Index and its mutex
+    // Index with mutex
     index_type*     index;
     std::mutex      index_mutex;
 
@@ -75,7 +86,7 @@ private:
      * Note: The zero timestamp is reserved for making versions invisible to
      * everyone (e.g. when rolling back inserts), so it starts at 2.
      */
-    std::atomic<stamp_type> next_ts{2};
+    std::atomic<stamp_type> next_ts;
 
     /**
      * Pool for unique transaction identifiers.
@@ -84,7 +95,7 @@ private:
      * numbers which can be easily differentiated from timestamps which are
      * always even.
      */
-    std::atomic<id_type> next_id{1};
+    std::atomic<id_type> next_id;
 
 // ############################################################################
 // PUBLIC API
@@ -94,11 +105,11 @@ public:
     explicit store(pool_type& pop);
 
     // Copying is not allowed
-    store(const this_type& other) = delete;
+    explicit store(const this_type& other) = delete;
     this_type& operator=(const this_type& other) = delete;
 
     // Moving is not allowed
-    store(this_type&& other) = delete;
+    explicit store(this_type&& other) = delete;
     this_type& operator=(this_type&& other) = delete;
 
     ~store() = default;
@@ -118,22 +129,32 @@ public:
 // ############################################################################
 
 private:
-    // int _update(transaction::ptr tx, const key_type& key, const mapped_type& value, detail::history::ptr history);
-    int _insert(transaction::ptr tx, const key_type& key, const mapped_type& value);
-    bool installVersions(transaction::ptr tx);
-    void finalizeStamps(transaction::ptr tx);
-    void rollback(transaction::ptr tx);
-    bool validate(transaction::ptr tx);
-    void init();
 
-    detail::version::ptr getVersionW(detail::history::ptr& history, transaction::ptr tx);
-    detail::version::ptr getVersionR(detail::history::ptr& history, transaction::ptr tx);
+    void init();
+    void purgeHistory(detail::history::ptr& history);
+
+    int insert(transaction::ptr tx, const key_type& key, const mapped_type& value);
+    detail::version::ptr getWritableSnapshot(detail::history::ptr& history, transaction::ptr tx);
+    detail::version::ptr getReadableSnapshot(detail::history::ptr& history, transaction::ptr tx);
     bool isWritable(detail::version::ptr& v, transaction::ptr tx);
     bool isReadable(detail::version::ptr& v, transaction::ptr tx);
+    bool validate(transaction::ptr tx);
+    void rollback(transaction::ptr tx);
+    void finalize(transaction::ptr tx);
+    bool persist(transaction::ptr tx);
 
-    transaction::status_code get_tx_status(const id_type id);
-    bool has_valid_entries(const detail::history::ptr& hist);
-    void purgeHistory(detail::history::ptr& history);
+    bool isValidTransaction(const transaction::ptr tx);
+
+    /**
+     * Tests whether the given history contains at least one
+     * version that is not permanently invalidated.
+     */
+    bool hasValidSnapshots(const detail::history::ptr& hist);
+
+    /**
+     * Tests whether the given value is a transaction id.
+     */
+    inline bool isTransactionId(const stamp_type data);
 };
 
 }
