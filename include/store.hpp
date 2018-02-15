@@ -1,11 +1,11 @@
 #ifndef STORE_HPP
 #define STORE_HPP
 
-#include <cstddef>
 #include <string>
 #include <mutex>
 
 #include <libpmemobj++/pool.hpp>
+#include <libpmemobj++/persistent_ptr.hpp>
 
 #include <libcuckoo/cuckoohash_map.hh>
 
@@ -48,12 +48,9 @@ public:
         VALUE_NOT_FOUND = 404
     };
 
-    /**
-     * Infinity timestamp. Used in end timestamp fields to mark versions as valid.
-     */
     enum : stamp_type
     {
-        INFINITY = std::numeric_limits<stamp_type>::max() - 1,
+        TS_INFINITY = std::numeric_limits<stamp_type>::max() - 1,
         TS_DELTA = 2,
         TS_START = 2,
         ID_START = 1,
@@ -75,27 +72,11 @@ private:
     // Transaction table
     tx_table_type   tx_tab;
 
-    /**
-     * Logical clock for handing out timestamps.
-     *
-     * This timer is initialized with two and is always incremented by two.
-     * Therefore, timestamps are always even numbers. Transaction IDs on the
-     * other hand are odd. This way it is easy to tell both from another when
-     * inspecting begin/end fields of versions. We only need to test the LSB.
-     *
-     * Note: The zero timestamp is reserved for making versions invisible to
-     * everyone (e.g. when rolling back inserts), so it starts at 2.
-     */
-    std::atomic<stamp_type> next_ts;
+    // Logical clock for handing out timestamps. Must be even.
+    std::atomic<stamp_type> timestampCounter;
 
-    /**
-     * Pool for unique transaction identifiers.
-     *
-     * Initialized with one and always incremented by two. Always yields odd
-     * numbers which can be easily differentiated from timestamps which are
-     * always even.
-     */
-    std::atomic<id_type> next_id;
+    // Pool for handing out unique transaction identifiers. Must be odd.
+    std::atomic<id_type> idCounter;
 
 // ############################################################################
 // PUBLIC API

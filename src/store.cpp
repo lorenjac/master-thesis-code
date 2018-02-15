@@ -12,8 +12,8 @@ store::store(pool_type& pop)
     : pop{pop}
     , index{}
     , tx_tab{}
-    , next_ts{TS_START}
-    , next_id{ID_START}
+    , timestampCounter{TS_START}
+    , idCounter{ID_START}
 {
     init();
 }
@@ -22,8 +22,8 @@ transaction::ptr store::begin()
 {
     // Create new transaction with current timestamp
     auto tx = std::make_shared<transaction>(
-        next_id.fetch_add(TS_DELTA),
-        next_ts.fetch_add(TS_DELTA)
+        idCounter.fetch_add(TS_DELTA),
+        timestampCounter.fetch_add(TS_DELTA)
     );
 
     if (!tx)
@@ -72,7 +72,7 @@ int store::commit(transaction::ptr tx)
         return INVALID_TX;
 
     // Set tx end timestamp
-    tx->setEnd(next_ts.fetch_add(TS_DELTA));
+    tx->setEnd(timestampCounter.fetch_add(TS_DELTA));
 
     // Note: This is where validation would take place (not required for snapshot isolation)
     // if (!validate(tx))
@@ -226,7 +226,7 @@ int store::drop(transaction::ptr tx, const key_type& key)
                 // operation is not synchronized with regard to is history.
                 // However, the version already carries our id so we have full
                 // ownership. Releasing it can cause no damage.
-                mod.v_origin->end.store(INFINITY);
+                mod.v_origin->end.store(TS_INFINITY);
             });
         }
         else if (mod.code == transaction::Mod::Kind::Remove) {
@@ -343,12 +343,12 @@ void store::init()
     // Increase timestamp counter. This way, all subsequent transactions
     // of this session have higher timestamps than all the versions that
     // were reset above.
-    next_ts.fetch_add(TS_DELTA);
+    timestampCounter.fetch_add(TS_DELTA);
 }
 
 void store::purgeHistory(detail::history::ptr& history)
 {
-    const auto first_stamp = next_ts.load();
+    const auto first_stamp = timestampCounter.load();
     auto& chain = history->chain;
     auto end = chain.end();
     for (auto it = chain.begin(); it != end; ) {
@@ -360,7 +360,7 @@ void store::purgeHistory(detail::history::ptr& history)
             it = chain.erase(it, pop);
             pmdk::delete_persistent<detail::version>(v);
         }
-        else if (v->end == INFINITY) {
+        else if (v->end == TS_INFINITY) {
             // V was valid before restart. Make it look like it was
             // created during this session.
             v->begin = first_stamp;
@@ -372,7 +372,7 @@ void store::purgeHistory(detail::history::ptr& history)
             // again, make it look like it was created during this
             // session.
             v->begin = first_stamp;
-            v->end = INFINITY;
+            v->end = TS_INFINITY;
             ++it;
         }
         else {
@@ -527,7 +527,7 @@ bool store::isWritable(detail::version::ptr& v, transaction::ptr tx)
         if (other_tx->getStatus().load() != transaction::FAILED)
             return false;
     }
-    else if (v_end != INFINITY) {
+    else if (v_end != TS_INFINITY) {
         // V is only visible to tx if it is not been invalidated (no matter when).
         //
         // Note: This constraint is more restrictive than its
@@ -557,7 +557,7 @@ bool store::persist(transaction::ptr tx)
             auto new_version = pmdk::make_persistent<detail::version>();
             new_version->begin = tid;
             new_version->data = change.delta;
-            new_version->end = INFINITY;
+            new_version->end = TS_INFINITY;
 
             // Register new version with change set
             change.v_new = new_version;
@@ -707,9 +707,9 @@ void store::rollback(transaction::ptr tx)
                 // other transaction already correctly owns this version.
                 // Since all updaters register themselves atomically, they
                 // will either insert their TID first (in which case we fail
-                // to reset it) or they will find a perfectly INFINITY timestamp
+                // to reset it) or they will find a perfectly TS_INFINITY timestamp
                 // which they can overwrite with their TID without problems.
-                change.v_origin->end.compare_exchange_strong(tid, INFINITY);
+                change.v_origin->end.compare_exchange_strong(tid, TS_INFINITY);
                 tid = tx->getId(); // recover from side effect of CAS above
                 break;
 
@@ -722,9 +722,9 @@ void store::rollback(transaction::ptr tx)
                 // other transaction already correctly owns this version.
                 // Since all updaters register themselves atomically, they
                 // will either insert their TID first (in which case we fail
-                // to reset it) or they will find a perfectly INFINITY timestamp
+                // to reset it) or they will find a perfectly TS_INFINITY timestamp
                 // which they can overwrite with their TID without problems.
-                change.v_origin->end.compare_exchange_strong(tid, INFINITY);
+                change.v_origin->end.compare_exchange_strong(tid, TS_INFINITY);
                 tid = tx->getId(); // recover from side effect of CAS above
                 break;
             }
@@ -742,7 +742,7 @@ bool store::hasValidSnapshots(const detail::history::ptr& hist)
 {
     for (auto& v : hist->chain) {
         auto v_end = v->end.load();
-        if (v_end == INFINITY || isTransactionId(v_end))
+        if (v_end == TS_INFINITY || isTransactionId(v_end))
             return true;
     }
     return false;

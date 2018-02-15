@@ -156,14 +156,7 @@ public:
         pmdk::transaction::exec_tx(pool, [&,this](){
             auto new_node = pmdk::make_persistent<node>();
             new_node->mValue = elem;
-            if (mHead) {
-                new_node->mNext = mHead; // head becomes successor of new node
-                mHead->mPrev = new_node; // new node becomes predecessor of head
-            }
-            else {
-                mTail = new_node;
-            }
-            mHead = new_node;
+            push_front(new_node);
         });
     }
 
@@ -328,44 +321,6 @@ public:
     iterator begin() { return iterator{mHead.get()}; }
     iterator end() { return iterator{}; }
 
-    // /**
-    //  * Const iterator
-    //  */
-    // class const_iterator
-    // {
-    // private:
-    //     node* curr;
-    //
-    // public:
-    //     explicit const_iterator(node* curr = nullptr)
-    //         : curr(curr)
-    //     {}
-    //
-    //     const elem_type& operator*() { return curr->mValue; }
-    //     const elem_type* operator->() { return &curr->mValue; }
-    //
-    //     bool operator==(const const_iterator& other) { return curr == other.curr; }
-    //     bool operator!=(const const_iterator& other) { return curr != other.curr; }
-    //
-    //     const_iterator operator++() {
-    //         auto old = *this;
-    //         curr = curr->mNext.get();
-    //         return old;
-    //     }
-    //
-    //     const_iterator operator++(int) {
-    //         curr = curr->mNext.get();
-    //         return *this;
-    //     }
-    // };
-    //
-    // const_iterator cbegin() const { return const_iterator{mHead.get()}; }
-    // const_iterator cend() const { return const_iterator{}; }
-
-    // Uncomment these functions if you need const iterators in foreach loops
-    // const_iterator begin() const { return const_iterator{mHead}; }
-    // const_iterator end() const { return const_iterator{}; }
-
 // ############################################################################
 // PRIVATE API
 // ############################################################################
@@ -391,6 +346,19 @@ private:
             mHead = node;
             mTail = mHead;
         }
+        ++mSize.get_rw();
+    }
+
+    void push_front(pmdk::persistent_ptr<node> node)
+    {
+        if (mHead) {
+            node->mNext = mHead; // head becomes successor of new node
+            mHead->mPrev = node; // new node becomes predecessor of head
+        }
+        else {
+            mTail = node;
+        }
+        mHead = node;
         ++mSize.get_rw();
     }
 
