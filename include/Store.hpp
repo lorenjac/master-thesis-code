@@ -19,14 +19,14 @@ namespace detail {
 
 namespace pmdk = pmem::obj;
 
-class store
+class Store
 {
 // ############################################################################
 // TYPES
 // ############################################################################
 
 public:
-    using this_type = store;
+    using this_type = Store;
     using key_type = std::string;
     using mapped_type = std::string;
 
@@ -84,17 +84,17 @@ private:
 // ############################################################################
 
 public:
-    explicit store(pool_type& pop);
+    explicit Store(pool_type& pop);
 
     // Copying is not allowed
-    explicit store(const this_type& other) = delete;
+    explicit Store(const this_type& other) = delete;
     this_type& operator=(const this_type& other) = delete;
 
     // Moving is not allowed
-    explicit store(this_type&& other) = delete;
+    explicit Store(this_type&& other) = delete;
     this_type& operator=(this_type&& other) = delete;
 
-    ~store() = default;
+    ~Store() = default;
 
     transaction::ptr begin();
     int abort(transaction::ptr tx, int reason);
@@ -139,7 +139,7 @@ private:
     inline bool isTransactionId(const stamp_type data);
 };
 
-bool init(store::pool_type& pop, std::string file, size_type pool_size);
+bool init(Store::pool_type& pop, std::string file, size_type pool_size);
 
 } // end namespace detail
 } // end namespace midas

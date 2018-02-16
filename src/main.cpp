@@ -8,7 +8,6 @@
 
 namespace app {
 
-using pool_type = midas::store::pool_type;
 using command = std::tuple<std::string, std::string, std::string>;
 
 const std::size_t POOL_SIZE = 64ULL * 1024 * 1024; // 64 MB
@@ -28,7 +27,7 @@ void usage()
     std::cout << std::endl;
 }
 
-void execCommand(midas::store& store, const command& pack)
+void execCommand(midas::Store& store, const command& pack)
 {
     const auto [cmd, key, value] = pack;
     if (cmd == "w" && key.size() && value.size()) {
@@ -108,9 +107,9 @@ void execCommand(midas::store& store, const command& pack)
     }
 }
 
-void launch(pool_type& pop, const command& pack)
+void launch(midas::pop_type& pop, const command& pack)
 {
-    midas::store store{pop};
+    midas::Store store{pop};
     if (std::get<0>(pack).empty()) {
         std::string input;
         std::string token;
@@ -163,7 +162,7 @@ int main(int argc, char* argv[])
     if (argc > 3)
         arg2 = argv[3];
 
-    app::pool_type pop;
+    midas::pop_type pop;
     if (midas::init(pop, file, app::POOL_SIZE)) {
         app::launch(pop, std::make_tuple(cmd, arg1, arg2));
         pop.close();

@@ -1,4 +1,4 @@
-#include "store.hpp"
+#include "Store.hpp"
 
 #include <experimental/filesystem>  // std::exists
 #include <memory> // std::make_shared
@@ -10,7 +10,7 @@ namespace detail {
 // PUBLIC API
 // ############################################################################
 
-store::store(pool_type& pop)
+Store::Store(pool_type& pop)
     : pop{pop}
     , index{}
     , tx_tab{}
@@ -20,7 +20,7 @@ store::store(pool_type& pop)
     init();
 }
 
-transaction::ptr store::begin()
+transaction::ptr Store::begin()
 {
     // Create new transaction with current timestamp
     auto tx = std::make_shared<transaction>(
@@ -34,16 +34,16 @@ transaction::ptr store::begin()
     // Add new transaction to list of running transactions
     tx_tab.insert(tx->getId(), tx);
 
-    // std::cout << "store::begin(): spawned new transaction {";
+    // std::cout << "Store::begin(): spawned new transaction {";
     // std::cout << "id=" << tx->getId() << ", begin=" << tx->getBegin() << "}\n";
-    // std::cout << "store::begin(): number of transactions is " << tx_tab.size() << '\n';
+    // std::cout << "Store::begin(): number of transactions is " << tx_tab.size() << '\n';
 
     return tx;
 }
 
-int store::abort(transaction::ptr tx, int reason)
+int Store::abort(transaction::ptr tx, int reason)
 {
-    // std::cout << "store::abort(tx{id=" << tx->getId() << "}";
+    // std::cout << "Store::abort(tx{id=" << tx->getId() << "}";
     // std::cout << ", reason=" << reason << "):" << '\n';
 
     // Reject invalid or inactive transactions.
@@ -65,9 +65,9 @@ int store::abort(transaction::ptr tx, int reason)
     return reason;
 }
 
-int store::commit(transaction::ptr tx)
+int Store::commit(transaction::ptr tx)
 {
-    // std::cout << "store::commit(tx{id=" << tx->getId() << "}):" << '\n';
+    // std::cout << "Store::commit(tx{id=" << tx->getId() << "}):" << '\n';
 
     // Reject invalid or inactive transactions.
     if (!isValidTransaction(tx))
@@ -99,9 +99,9 @@ int store::commit(transaction::ptr tx)
     return OK;
 }
 
-int store::read(transaction::ptr tx, const key_type& key, mapped_type& result)
+int Store::read(transaction::ptr tx, const key_type& key, mapped_type& result)
 {
-    // std::cout << "store::read(tx{id=" << tx->getId() << "}):" << '\n';
+    // std::cout << "Store::read(tx{id=" << tx->getId() << "}):" << '\n';
 
     // Reject invalid or inactive transactions.
     if (!isValidTransaction(tx))
@@ -125,7 +125,7 @@ int store::read(transaction::ptr tx, const key_type& key, mapped_type& result)
     if (!candidate)
         return abort(tx, VALUE_NOT_FOUND);
 
-    // std::cout << "store::read(): version found for key '" << key << "': {";
+    // std::cout << "Store::read(): version found for key '" << key << "': {";
     // std::cout << "begin=" << candidate->begin;
     // std::cout << ", end=" << candidate->end;
     // std::cout << ", data=" << candidate->data << "}\n";
@@ -135,9 +135,9 @@ int store::read(transaction::ptr tx, const key_type& key, mapped_type& result)
     return OK;
 }
 
-int store::write(transaction::ptr tx, const key_type& key, const mapped_type& value)
+int Store::write(transaction::ptr tx, const key_type& key, const mapped_type& value)
 {
-    // std::cout << "store::write(tx{id=" << tx->getId() << "}):" << '\n';
+    // std::cout << "Store::write(tx{id=" << tx->getId() << "}):" << '\n';
 
     // Reject invalid or inactive transactions.
     if (!isValidTransaction(tx))
@@ -201,9 +201,9 @@ int store::write(transaction::ptr tx, const key_type& key, const mapped_type& va
     return OK;
 }
 
-int store::drop(transaction::ptr tx, const key_type& key)
+int Store::drop(transaction::ptr tx, const key_type& key)
 {
-    // std::cout << "store::drop(tx{id=" << tx->getId() << "}):" << '\n';
+    // std::cout << "Store::drop(tx{id=" << tx->getId() << "}):" << '\n';
 
     // Reject invalid or inactive transactions.
     if (!isValidTransaction(tx))
@@ -271,7 +271,7 @@ int store::drop(transaction::ptr tx, const key_type& key)
     return OK;
 }
 
-void store::print()
+void Store::print()
 {
     const auto end = index->end();
     std::cout << "--" << std::endl;
@@ -299,7 +299,7 @@ void store::print()
 // PRIVATE API
 // ############################################################################
 
-void store::init()
+void Store::init()
 {
     // Retrieve volatile pointer to index. This is done to avoid expensive calls
     // to the overloaded dereference operators in pmdk::persistent_ptr<T>.
@@ -348,7 +348,7 @@ void store::init()
     timestampCounter.fetch_add(TS_DELTA);
 }
 
-void store::purgeHistory(history::ptr& history)
+void Store::purgeHistory(history::ptr& history)
 {
     const auto first_stamp = timestampCounter.load();
     auto& chain = history->chain;
@@ -386,7 +386,7 @@ void store::purgeHistory(history::ptr& history)
     }
 }
 
-int store::insert(transaction::ptr tx, const key_type& key, const mapped_type& value)
+int Store::insert(transaction::ptr tx, const key_type& key, const mapped_type& value)
 {
     tx->getChangeSet().emplace(key, transaction::Mod{
         transaction::Mod::Kind::Insert,
@@ -397,9 +397,9 @@ int store::insert(transaction::ptr tx, const key_type& key, const mapped_type& v
     return OK;
 }
 
-version::ptr store::getWritableSnapshot(history::ptr& history, transaction::ptr tx)
+version::ptr Store::getWritableSnapshot(history::ptr& history, transaction::ptr tx)
 {
-    // std::cout << "store::getWritableSnapshot(tx{id=" << tx->getId() << "}):" << '\n';
+    // std::cout << "Store::getWritableSnapshot(tx{id=" << tx->getId() << "}):" << '\n';
 
     for (auto& v : history->chain) {
         if (isWritable(v, tx))
@@ -408,9 +408,9 @@ version::ptr store::getWritableSnapshot(history::ptr& history, transaction::ptr 
     return nullptr;
 }
 
-version::ptr store::getReadableSnapshot(history::ptr& history, transaction::ptr tx)
+version::ptr Store::getReadableSnapshot(history::ptr& history, transaction::ptr tx)
 {
-    // std::cout << "store::getReadableSnapshot(tx{id=" << tx->getId() << "}):" << '\n';
+    // std::cout << "Store::getReadableSnapshot(tx{id=" << tx->getId() << "}):" << '\n';
 
     for (auto& v : history->chain) {
         if (isReadable(v, tx))
@@ -419,7 +419,7 @@ version::ptr store::getReadableSnapshot(history::ptr& history, transaction::ptr 
     return nullptr;
 }
 
-bool store::isReadable(version::ptr& v, transaction::ptr tx)
+bool Store::isReadable(version::ptr& v, transaction::ptr tx)
 {
     // Read begin/end fields
     auto v_begin = v->begin;
@@ -480,7 +480,7 @@ bool store::isReadable(version::ptr& v, transaction::ptr tx)
     return true;
 }
 
-bool store::isWritable(version::ptr& v, transaction::ptr tx)
+bool Store::isWritable(version::ptr& v, transaction::ptr tx)
 {
     auto v_begin = v->begin;
     auto v_end = v->end.load();
@@ -543,9 +543,9 @@ bool store::isWritable(version::ptr& v, transaction::ptr tx)
     return true;
 }
 
-bool store::persist(transaction::ptr tx)
+bool Store::persist(transaction::ptr tx)
 {
-    // std::cout << "store::persist(tx{id=" << tx->getId() << "}):" << '\n';
+    // std::cout << "Store::persist(tx{id=" << tx->getId() << "}):" << '\n';
 
     bool success = true;
     const auto tid = tx->getId();
@@ -620,9 +620,9 @@ bool store::persist(transaction::ptr tx)
     return success;
 }
 
-void store::finalize(transaction::ptr tx)
+void Store::finalize(transaction::ptr tx)
 {
-    // std::cout << "store::finalize(tx{id=" << tx->getId() << "}):" << '\n';
+    // std::cout << "Store::finalize(tx{id=" << tx->getId() << "}):" << '\n';
 
     const auto tx_end_stamp = tx->getEnd();
     pmdk::transaction::exec_tx(pop, [&,this](){
@@ -664,9 +664,9 @@ void store::finalize(transaction::ptr tx)
     });
 }
 
-void store::rollback(transaction::ptr tx)
+void Store::rollback(transaction::ptr tx)
 {
-    // std::cout << "store::rollback(tx{id=" << tx->getId() << "}):" << '\n';
+    // std::cout << "Store::rollback(tx{id=" << tx->getId() << "}):" << '\n';
 
     auto tid = tx->getId();
     pmdk::transaction::exec_tx(pop, [&,this](){
@@ -734,13 +734,13 @@ void store::rollback(transaction::ptr tx)
     });
 } // end function rollback
 
-bool store::isValidTransaction(const transaction::ptr tx)
+bool Store::isValidTransaction(const transaction::ptr tx)
 {
     return (tx && tx_tab.contains(tx->getId()) &&
             tx->getStatus().load() == transaction::ACTIVE);
 }
 
-bool store::hasValidSnapshots(const history::ptr& hist)
+bool Store::hasValidSnapshots(const history::ptr& hist)
 {
     for (auto& v : hist->chain) {
         auto v_end = v->end.load();
@@ -750,16 +750,16 @@ bool store::hasValidSnapshots(const history::ptr& hist)
     return false;
 }
 
-bool store::isTransactionId(const stamp_type data)
+bool Store::isTransactionId(const stamp_type data)
 {
     return data & 1;
 }
 
-bool init(store::pool_type& pop, std::string file, size_type pool_size)
+bool init(Store::pool_type& pop, std::string file, size_type pool_size)
 {
     namespace filesystem = std::experimental::filesystem::v1;
-    using pool_type = store::pool_type;
-    using index_type = store::index_type;
+    using pool_type = Store::pool_type;
+    using index_type = Store::index_type;
 
     const std::string layout{"midas"};
     if (filesystem::exists(file)) {
