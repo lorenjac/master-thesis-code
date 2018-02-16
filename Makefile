@@ -60,7 +60,7 @@ badTiming : makeDir base
 	$(CC) $(CFLAGS) $(BIN_DIR)/*.o $(LDFLAGS) -o $(BIN_DIR)/$@
 
 base :
-	$(CC) -c $(CFLAGS) $(INCLUDE) $(SRC_DIR)/store.cpp -o $(BIN_DIR)/store.o
+	$(CC) -c $(CFLAGS) $(INCLUDE) $(SRC_DIR)/Store.cpp -o $(BIN_DIR)/Store.o
 	$(CC) -c $(CFLAGS) $(INCLUDE) $(SRC_DIR)/string.cpp -o $(BIN_DIR)/string.o
 
 makeDir :

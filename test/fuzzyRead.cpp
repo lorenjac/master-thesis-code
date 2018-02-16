@@ -12,7 +12,7 @@ namespace app {
 
 void launch(midas::pop_type& pop)
 {
-    midas::store store{pop};
+    midas::Store store{pop};
 
     // Insert a value
     {
