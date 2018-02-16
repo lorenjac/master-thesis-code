@@ -162,6 +162,49 @@ public:
     }
 
     /**
+     * Inserts an element at the specified position.
+     *
+     * If there is an element at the given position, the new element will take
+     * its position and the former element will be pushed to the right.
+     *
+     * Pos may be equal to the size of the list. In this case, the item is
+     * added to the back of the list.
+     */
+    template <class pool_type>
+    void insert(size_type pos, const elem_type& elem, pmdk::pool<pool_type>& pool)
+    {
+        // Fail if index is invalid
+        if (pos > size())
+            throw std::out_of_range("index is out of range!");
+
+        // Create and move iterator to specified position
+        auto it = begin();
+        for (size_type i=0; i<pos; ++i)
+            ++it;
+
+        insert(it, elem, pool);
+    }
+
+    /**
+     * Inserts an element at the specified position.
+     *
+     * If there is an element at the given position, the new element will take
+     * its position and the former element will be pushed to the right.
+     *
+     * Pos may be the end iterator. In this case, the item is added to the back
+     * of the list.
+     */
+    template <class pool_type>
+    void insert(iterator pos, const elem_type& elem, pmdk::pool<pool_type>& pool)
+    {
+        pmdk::transaction::exec_tx(pool, [&,this](){
+            auto new_node = pmdk::make_persistent<node>();
+            new_node->mValue = elem;
+            insert(pos, new_node);
+        });
+    }
+
+    /**
      * Steal an element from another list and add it to the back of this list.
      *
      * Does not involve any allocations or deallocations. The indexed node
@@ -184,8 +227,36 @@ public:
 
         // Unlink specified node from other list and append it to this list
         pmdk::transaction::exec_tx(pool, [&,this](){
-            auto unlinked_node = other.unlink(it);
+            auto unlinked_node = other.remove(it);
             push_back(unlinked_node);
+        });
+    }
+
+    /**
+     * Steal an element from another list and add it to the front of this list.
+     *
+     * Does not involve any allocations or deallocations. The indexed node
+     * is simply unlinked from the other list and appended to this list.
+     *
+     * Fails, if the specified index is invalid in the other list.
+     */
+    template <class pool_type>
+    void push_front_from(this_type& other, const size_type pos,
+            pmdk::pool<pool_type>& pool)
+    {
+        // Fail if index is invalid
+        if (pos >= other.size())
+            throw std::out_of_range("index is out of range!");
+
+        // Create and move iterator to specified position
+        auto it = other.begin();
+        for (size_type i = 0; i < pos; ++i)
+            ++it;
+
+        // Unlink specified node from other list and append it to this list
+        pmdk::transaction::exec_tx(pool, [&,this](){
+            auto unlinked_node = other.remove(it);
+            push_front(unlinked_node);
         });
     }
 
@@ -245,18 +316,22 @@ public:
         erase(it, pool);
     }
 
+    /**
+     * Remove an element at the given position in the list.
+     * Throws std::out_of_range if pos is invalid.
+     */
     template <class pool_type>
-    iterator erase(iterator it, pmdk::pool<pool_type>& pool)
+    iterator erase(iterator pos, pmdk::pool<pool_type>& pool)
     {
         // Fail if index is invalid
-        if (it == end())
+        if (pos == end())
             throw std::out_of_range("iterator is out of range!");
 
         pmdk::transaction::exec_tx(pool, [&,this](){
-            auto node_to_remove = unlink(it++);
+            auto node_to_remove = remove(pos++);
             pmdk::delete_persistent<node>(node_to_remove);
         });
-        return it; // return iterator to next element or end
+        return pos; // return iterator to next element or end
     }
 
     /**
@@ -363,13 +438,46 @@ private:
         ++mSize.get_rw();
     }
 
-    pmdk::persistent_ptr<node> unlink(const iterator& it)
+    void insert(iterator pos, pmdk::persistent_ptr<node> node)
+    {
+        if (pos.curr == nullptr) {
+            // Insert node BEFORE nullptr [= end()], that is, after tail. There
+            // is no special case for pos.curr = tail because inserting before
+            // the tail does not result in a new tail (as opposed to inserting
+            // at the front).
+            push_back(node);
+        }
+        else if (pos.curr == mHead.get()) {
+            // Insert node BEFORE frontmost element (= head)
+            push_front(node);
+        }
+        else {
+            // Since pos != front() and pos != end() we know that head != tail
+            // and node will be head < node < tail. Therefore, we know that pos
+            // must have a predecessor and a successor, so we can proceed with
+            // ease.
+
+            auto pred = pos.curr->mPrev;
+            auto curr = pred->mNext;
+
+            // Make new node aware of its neighbors
+            node->mPrev = pred;
+            node->mNext = curr;
+
+            // Make surrounding nodes aware of new node
+            pred->mNext = node;
+            curr->mPrev = node;
+            ++mSize.get_rw();
+        }
+    }
+
+    pmdk::persistent_ptr<node> remove(iterator pos)
     {
         // Stores a ptr to a node that will be deleted once it is unlinked
         pmdk::persistent_ptr<node> unlinked;
 
         // Decide whether the node in question is front, back, or in between
-        if (it.curr == mHead.get()) {
+        if (pos.curr == mHead.get()) {
             auto tmp = mHead;
 
             // Unset backward link of successor (if such a node exists)
@@ -388,7 +496,7 @@ private:
             // Mark former head for destruction
             unlinked = tmp;
         }
-        else if (it.curr == mTail.get()) {
+        else if (pos.curr == mTail.get()) {
             auto tmp = mTail;
 
             // Unset forward link of predecessor.
@@ -406,7 +514,7 @@ private:
         }
         else {
             // Retrieve persistent_ptr to current iterator position
-            auto curr = it.curr->mPrev->mNext;
+            auto curr = pos.curr->mPrev->mNext;
 
             // Retrieve predecessor and successor of the current node.
             // These must exist because we handled or corner cases before.
