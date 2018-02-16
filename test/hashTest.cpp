@@ -29,8 +29,8 @@ std::ostream& operator<<(std::ostream& os, const string& str)
 namespace app {
 
     using midas::detail::string;
-    using midas::detail::hashmap;
-    using midas::detail::hashmap_config;
+    using midas::detail::NVHashmap;
+    using midas::detail::DefaultHashmapConfig;
 
 // ############################################################################
 // Controls how volatile keys are mapped to persistent keys append ensures that
@@ -87,8 +87,8 @@ using value_type = int;
 // ############################################################################
 
 struct my_hashmap_config {
-    using size_type = hashmap_config::size_type;
-    using float_type = hashmap_config::float_type;
+    using size_type = DefaultHashmapConfig::size_type;
+    using float_type = DefaultHashmapConfig::float_type;
 
     static constexpr size_type INIT_SIZE = 4;
     static constexpr size_type GROW_FACTOR = 2;
@@ -100,7 +100,7 @@ struct my_hashmap_config {
 // ############################################################################
 
 using mapped_type = pm::persistent_ptr<value_type>;
-using map_t = hashmap<
+using map_t = NVHashmap<
     my_string_hasher,
     mapped_type,
     my_hashmap_config

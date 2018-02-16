@@ -31,7 +31,7 @@ public:
     using mapped_type = std::string;
 
     using tx_table_type = cuckoohash_map<id_type, transaction::ptr>;
-    using index_type = hashmap<index::hasher,
+    using index_type = NVHashmap<index::hasher,
                                history::ptr,
                                index::config>;
 

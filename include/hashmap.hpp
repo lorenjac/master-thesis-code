@@ -20,7 +20,7 @@ namespace detail {
 
 namespace pmdk = pmem::obj;
 
-struct hashmap_config {
+struct DefaultHashmapConfig {
     using size_type = std::size_t;
     using float_type = double;
 
@@ -29,8 +29,8 @@ struct hashmap_config {
     static constexpr float_type MAX_LOAD_FACTOR = 0.75;
 };
 
-template <class Hash, class T, class Config = hashmap_config>
-class hashmap
+template <class Hash, class T, class Config = DefaultHashmapConfig>
+class NVHashmap
 {
 
 // ############################################################################
@@ -41,7 +41,7 @@ public:
     using hash_type = Hash;
     using mapped_type = T;
     using size_type = std::size_t;
-    using this_type = hashmap<Hash, T, Config>;
+    using this_type = NVHashmap<Hash, T, Config>;
 
     // Keys of this type are only used for queries but are never stored.
     // When storing keys, volatile keys are copied into persistent keys.
@@ -86,15 +86,15 @@ private:
 // ############################################################################
 
 public:
-    hashmap()
+    NVHashmap()
         : mBuckets{}
         , mBucketCount{}
         , mElemCount{}
     {}
 
-    hashmap(const this_type& other) = delete;
+    NVHashmap(const this_type& other) = delete;
 
-    hashmap(this_type&& other)
+    NVHashmap(this_type&& other)
         : mBuckets{other.mBuckets}
         , mBucketCount{other.mBucketCount}
         , mElemCount{other.mElemCount}
@@ -104,7 +104,7 @@ public:
         other.mElemCount.get_rw() = 0;
     }
 
-    ~hashmap()
+    ~NVHashmap()
     {
         pmdk::delete_persistent<bucket_type[]>(mBuckets, mBucketCount);
     }
@@ -488,7 +488,7 @@ private:
             }
         });
     }
-}; // end class hashmap
+}; // end class NVHashmap
 
 } // end namespace detail
 } // end namespace midas

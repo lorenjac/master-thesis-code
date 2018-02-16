@@ -49,8 +49,8 @@ private:
 // ############################################################################
 
 struct config {
-    using size_type = hashmap_config::size_type;
-    using float_type = hashmap_config::float_type;
+    using size_type = DefaultHashmapConfig::size_type;
+    using float_type = DefaultHashmapConfig::float_type;
 
     static constexpr size_type INIT_SIZE = 4;
     static constexpr size_type GROW_FACTOR = 2;

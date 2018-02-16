@@ -1,4 +1,4 @@
-#include "Store.hpp"
+#include "store.hpp"
 
 #include <experimental/filesystem>  // std::exists
 #include <memory> // std::make_shared

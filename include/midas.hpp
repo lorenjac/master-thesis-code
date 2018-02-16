@@ -1,7 +1,7 @@
 #ifndef MIDAS_HPP
 #define MIDAS_HPP
 
-#include "Store.hpp"
+#include "store.hpp"
 
 namespace midas {
 
