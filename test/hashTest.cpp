@@ -12,12 +12,12 @@ namespace pm = pmem::obj;
 namespace midas {
 namespace detail {
 
-std::ostream& operator<<(std::ostream& os, const string& str)
+std::ostream& operator<<(std::ostream& os, const NVString& str)
 {
     const auto size = str.size.get_ro();
     os << "persistent_string [size=" << size;
     os << ", data={";
-    for (string::size_type i=0; i<size; ++i)
+    for (NVString::size_type i=0; i<size; ++i)
         os << str.data[i];
     os << "}]";
     return os;
@@ -28,7 +28,7 @@ std::ostream& operator<<(std::ostream& os, const string& str)
 
 namespace app {
 
-    using midas::detail::string;
+    using midas::detail::NVString;
     using midas::detail::NVHashmap;
     using midas::detail::DefaultHashmapConfig;
 
@@ -40,7 +40,7 @@ namespace app {
 class my_string_hasher {
 public:
     using volatile_key_type = std::string;
-    using persistent_key_type = string;
+    using persistent_key_type = NVString;
     using result_type = std::size_t;
 
     static result_type hash(const volatile_key_type& key) {

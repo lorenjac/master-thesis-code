@@ -1,5 +1,5 @@
-#ifndef STRING_HPP
-#define STRING_HPP
+#ifndef MIDAS_STRING_HPP
+#define MIDAS_STRING_HPP
 
 #include <stdexcept> // std::out_of_range
 #include <ostream>   // std::ostream
@@ -23,13 +23,13 @@ namespace pmdk = pmem::obj;
 // * terminate string with null-byte
 // * add more functions from std::string
 // * consider introducing a capacity to avoid needless allocations
-struct string
+struct NVString
 {
 // ############################################################################
 // TYPES
 // ############################################################################
 
-    using this_type = string;
+    using this_type = NVString;
     using size_type = std::size_t;
     using volatile_string = std::string;
 
@@ -44,7 +44,7 @@ struct string
 // CONSTRUCTORS
 // ############################################################################
 
-    string()
+    NVString()
         : data{}
         , size{}
     {}
@@ -52,13 +52,13 @@ struct string
     // Copying is not allowed at the moment
     // One reason is that I really want to avoid all kinds of allocations.
     // By prohibiting copying, I get a compiler error whenever someone tries.
-    explicit string(const this_type& other) = delete;
+    explicit NVString(const this_type& other) = delete;
 
-    explicit string(this_type&& other)
+    explicit NVString(this_type&& other)
         : data{}
         , size{}
     {
-        std::cout << "WARNING: string::string(string&&) called!" << std::endl;
+        std::cout << "WARNING: NVString::NVString(NVString&&) called!" << std::endl;
         std::swap(data, other.data);
         std::swap(size, other.size);
     }
@@ -70,13 +70,13 @@ struct string
 
     this_type& operator=(this_type&& other)
     {
-        std::cout << "WARNING: string::operator=(string&&) called!" << std::endl;
+        std::cout << "WARNING: NVString::operator=(NVString&&) called!" << std::endl;
         std::swap(data, other.data);
         std::swap(size, other.size);
         return *this;
     }
 
-    ~string()
+    ~NVString()
     {
         pmdk::delete_persistent<char[]>(data, size);
     }
@@ -105,7 +105,7 @@ struct string
     const char& at(const size_type pos) const
     {
         if (pos >= size.get_ro())
-            throw std::out_of_range("string::at(): index is out of range!");
+            throw std::out_of_range("NVString::at(): index is out of range!");
 
         return data[pos];
     }
@@ -113,7 +113,7 @@ struct string
     char& at(const size_type pos)
     {
         if (pos >= size.get_ro())
-            throw std::out_of_range("string::at(): index is out of range!");
+            throw std::out_of_range("NVString::at(): index is out of range!");
 
         return data[pos];
     }
@@ -168,7 +168,7 @@ struct string
     }
 };
 
-std::ostream& operator<<(std::ostream& os, const string& str);
+std::ostream& operator<<(std::ostream& os, const NVString& str);
 
 } // end namespace detail
 } // end namespace midas

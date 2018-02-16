@@ -1,10 +1,9 @@
-#ifndef TX_HPP
-#define TX_HPP
+#ifndef MIDAS_TX_HPP
+#define MIDAS_TX_HPP
 
-#include <string>
-// #include <vector> // std::vector
+#include <string>        // std::string
 #include <unordered_map> // std::unordered_map
-#include <atomic> // std::atomic
+#include <atomic>        // std::atomic
 
 #include "types.hpp"
 #include "version.hpp"
@@ -12,9 +11,9 @@
 namespace midas {
 namespace detail {
 
-class transaction {
+class Transaction {
 public:
-    using this_type = transaction;
+    using this_type = Transaction;
     using key_type = std::string;
     using value_type = std::string;
     using ptr = std::shared_ptr<this_type>;
@@ -26,10 +25,10 @@ public:
             Remove
         };
 
-        Kind                    code;
-        version::ptr    v_origin; // nullptr if code == Insert
-        value_type              delta;   // empty if code == Remove
-        version::ptr    v_new; // nullptr if code == Remove
+        Kind            code;
+        Version::ptr    v_origin; // nullptr if code == Insert
+        value_type      delta;    // empty if code == Remove
+        Version::ptr    v_new;    // nullptr if code == Remove
     };
 
     using delta_type = std::unordered_map<key_type, Mod>;
@@ -50,7 +49,7 @@ private:
     delta_type mChangeSet;
 
 public:
-    transaction(const id_type id, const stamp_type begin)
+    Transaction(const id_type id, const stamp_type begin)
         : mId{id}
         , mBegin{begin}
         , mEnd{}
@@ -59,15 +58,15 @@ public:
     {}
 
     // Transactions cannot be copied
-    explicit transaction(const this_type& other) = delete;
+    explicit Transaction(const this_type& other) = delete;
     this_type& operator=(const this_type& other) = delete;
 
     // Transactions could be moved there is currently no need for that
-    explicit transaction(this_type&& other) = delete;
+    explicit Transaction(this_type&& other) = delete;
     this_type& operator=(this_type&& other) = delete;
 
     // Destruction is trivial
-    ~transaction() = default;
+    ~Transaction() = default;
 
     id_type getId() const { return mId; }
     stamp_type getBegin() const { return mBegin; }

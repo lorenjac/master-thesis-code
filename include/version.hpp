@@ -1,5 +1,5 @@
-#ifndef VERSION_HPP
-#define VERSION_HPP
+#ifndef MIDAS_VERSION_HPP
+#define MIDAS_VERSION_HPP
 
 #include <libpmemobj++/persistent_ptr.hpp>
 #include <libpmemobj++/p.hpp>
@@ -14,24 +14,22 @@ namespace detail {
 
 namespace pmdk = pmem::obj;
 
-struct version {
-    using ptr = pmdk::persistent_ptr<version>;
+struct Version {
+    using ptr = pmdk::persistent_ptr<Version>;
 
     // timestamp from when this version was created (became visible)
-    // ATOMIC
-    // PERSISTENT
+    // TODO make atomic
+    // TODO make persistent
     stamp_type begin;
 
     // timestamp from when this version was invalidated
-    // ATOMIC
-    // PERSISTENT
-    // stamp_type end;
+    // TODO make persistent
     std::atomic<stamp_type> end;
 
     // payload of this version
-    string data;
+    NVString data;
 
-    version()
+    Version()
         : begin{}
         , end{}
         , data{}

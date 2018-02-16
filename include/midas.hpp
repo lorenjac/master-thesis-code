@@ -7,7 +7,7 @@ namespace midas {
 
     using detail::init;
     using detail::Store;
-    using detail::transaction;
+    using detail::Transaction;
 
     using pop_type = detail::Store::pool_type;
 }

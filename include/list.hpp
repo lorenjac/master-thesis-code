@@ -1,5 +1,5 @@
-#ifndef LIST_HPP
-#define LIST_HPP
+#ifndef MIDAS_LIST_HPP
+#define MIDAS_LIST_HPP
 
 #include <stdexcept> // std::out_of_range
 #include <cstddef>   // std::size_t
@@ -17,7 +17,7 @@ namespace detail {
 namespace pmdk = pmem::obj;
 
 template <class T>
-class list
+class NVList
 {
 // ############################################################################
 // TYPES
@@ -26,7 +26,7 @@ class list
 public:
     using elem_type = T;
     using size_type = std::size_t;
-    using this_type = list<elem_type>;
+    using this_type = NVList<elem_type>;
 
     class iterator;
 
@@ -73,18 +73,18 @@ private:
 // ############################################################################
 
 public:
-    list()
+    NVList()
         : mHead{}
         , mTail{}
         , mSize{}
     {}
 
-    list(const this_type& other) = delete;
+    NVList(const this_type& other) = delete;
 
     /**
      * Construct a list from an rvalue reference
      */
-    list(this_type&& other)
+    NVList(this_type&& other)
         : mHead{other.mHead}
         , mTail{other.mTail}
         , mSize{other.mSize}
@@ -97,7 +97,7 @@ public:
     /**
      * Destroys this list and all its nodes.
      */
-    ~list()
+    ~NVList()
     {
         // Removes all nodes from this list
         // Requires no transaction because dtors are always

@@ -1,5 +1,5 @@
-#ifndef STORE_HPP
-#define STORE_HPP
+#ifndef MIDAS_STORE_HPP
+#define MIDAS_STORE_HPP
 
 #include <string>
 #include <mutex>
@@ -30,10 +30,8 @@ public:
     using key_type = std::string;
     using mapped_type = std::string;
 
-    using tx_table_type = cuckoohash_map<id_type, transaction::ptr>;
-    using index_type = NVHashmap<index::hasher,
-                               history::ptr,
-                               index::config>;
+    using tx_table_type = cuckoohash_map<id_type, Transaction::ptr>;
+    using index_type = NVHashmap<IndexHasher, History::ptr, IndexParams>;
 
     struct root {
         pmdk::persistent_ptr<index_type> index;
@@ -96,13 +94,13 @@ public:
 
     ~Store() = default;
 
-    transaction::ptr begin();
-    int abort(transaction::ptr tx, int reason);
-    int commit(transaction::ptr tx);
+    Transaction::ptr begin();
+    int abort(Transaction::ptr tx, int reason);
+    int commit(Transaction::ptr tx);
 
-    int read(transaction::ptr tx, const key_type& key, mapped_type& result);
-    int write(transaction::ptr tx, const key_type& key, const mapped_type& value);
-    int drop(transaction::ptr tx, const key_type& key);
+    int read(Transaction::ptr tx, const key_type& key, mapped_type& result);
+    int write(Transaction::ptr tx, const key_type& key, const mapped_type& value);
+    int drop(Transaction::ptr tx, const key_type& key);
 
     void print();
 
@@ -113,25 +111,25 @@ public:
 private:
 
     void init();
-    void purgeHistory(history::ptr& history);
+    void purgeHistory(History::ptr& history);
 
-    int insert(transaction::ptr tx, const key_type& key, const mapped_type& value);
-    version::ptr getWritableSnapshot(history::ptr& history, transaction::ptr tx);
-    version::ptr getReadableSnapshot(history::ptr& history, transaction::ptr tx);
-    bool isWritable(version::ptr& v, transaction::ptr tx);
-    bool isReadable(version::ptr& v, transaction::ptr tx);
-    bool validate(transaction::ptr tx);
-    void rollback(transaction::ptr tx);
-    void finalize(transaction::ptr tx);
-    bool persist(transaction::ptr tx);
+    int insert(Transaction::ptr tx, const key_type& key, const mapped_type& value);
+    Version::ptr getWritableSnapshot(History::ptr& history, Transaction::ptr tx);
+    Version::ptr getReadableSnapshot(History::ptr& history, Transaction::ptr tx);
+    bool isWritable(Version::ptr& v, Transaction::ptr tx);
+    bool isReadable(Version::ptr& v, Transaction::ptr tx);
+    bool validate(Transaction::ptr tx);
+    void rollback(Transaction::ptr tx);
+    void finalize(Transaction::ptr tx);
+    bool persist(Transaction::ptr tx);
 
-    bool isValidTransaction(const transaction::ptr tx);
+    bool isValidTransaction(const Transaction::ptr tx);
 
     /**
      * Tests whether the given history contains at least one
      * version that is not permanently invalidated.
      */
-    bool hasValidSnapshots(const history::ptr& hist);
+    bool hasValidSnapshots(const History::ptr& hist);
 
     /**
      * Tests whether the given value is a transaction id.

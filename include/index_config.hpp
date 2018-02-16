@@ -1,5 +1,5 @@
-#ifndef INDEX_HPP
-#define INDEX_HPP
+#ifndef MIDAS_INDEX_HPP
+#define MIDAS_INDEX_HPP
 
 #include <string> // std::string
 
@@ -9,7 +9,6 @@
 
 namespace midas {
 namespace detail {
-namespace index {
 
 namespace pmdk = pmem::obj;
 
@@ -18,10 +17,10 @@ namespace pmdk = pmem::obj;
 // both key types produce the same hashes (required for rehashing)
 // ############################################################################
 
-class hasher {
+class IndexHasher {
 public:
     using volatile_key_type = std::string;
-    using persistent_key_type = string;
+    using persistent_key_type = NVString;
     using result_type = std::size_t;
 
     static result_type hash(const volatile_key_type& key) {
@@ -48,7 +47,7 @@ private:
 // Several parameters that control the behaviour of the hashmap (optional)
 // ############################################################################
 
-struct config {
+struct IndexParams {
     using size_type = DefaultHashmapConfig::size_type;
     using float_type = DefaultHashmapConfig::float_type;
 
@@ -57,7 +56,6 @@ struct config {
     static constexpr float_type MAX_LOAD_FACTOR = 0.75;
 };
 
-} // end namespace index
 } // end namespace detail
 } // end namespace midas
 

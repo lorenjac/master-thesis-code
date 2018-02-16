@@ -1,5 +1,5 @@
-#ifndef HASHMAP_HPP
-#define HASHMAP_HPP
+#ifndef MIDAS_HASHMAP_HPP
+#define MIDAS_HASHMAP_HPP
 
 #include <cstddef>   // std::size_t
 #include <utility>   // std::swap
@@ -70,7 +70,7 @@ public:
 
     // Each bucket stores key-value pairs of equally-hashing keys.
     // In this case, each bucket is simply a list of pair pointers.
-    using bucket_type = list<pmdk::persistent_ptr<pair>>;
+    using bucket_type = NVList<pmdk::persistent_ptr<pair>>;
 
 // ############################################################################
 // MEMBER VARIABLES

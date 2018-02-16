@@ -1,5 +1,5 @@
-#ifndef TYPES_HPP
-#define TYPES_HPP
+#ifndef MIDAS_TYPES_HPP
+#define MIDAS_TYPES_HPP
 
 #include <cstddef> // std::size_t
 #include <cstdint> // std::uint64_t

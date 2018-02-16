@@ -10,7 +10,7 @@ namespace pm = pmem::obj;
 
 namespace app {
 
-    using midas::detail::list;
+    using midas::detail::NVList;
 
 // CONSTANTS
 
@@ -20,7 +20,7 @@ const size_t poolSize = 2 * PMEMOBJ_MIN_POOL;
 // TYPES
 
 using elem_type = pm::p<int>;
-using list_t = list<elem_type>;
+using list_t = NVList<elem_type>;
 struct root_t {
     pm::persistent_ptr<list_t> list;
 };

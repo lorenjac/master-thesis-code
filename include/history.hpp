@@ -1,5 +1,5 @@
-#ifndef HISTORY_HPP
-#define HISTORY_HPP
+#ifndef MIDAS_HISTORY_HPP
+#define MIDAS_HISTORY_HPP
 
 #include <libpmemobj++/persistent_ptr.hpp>
 #include <libpmemobj++/mutex.hpp>
@@ -14,17 +14,17 @@ namespace detail {
 
 namespace pmdk = pmem::obj;
 
-struct history {
-    using ptr = pmdk::persistent_ptr<history>;
-    using elem_type = version::ptr;
+struct History {
+    using ptr = pmdk::persistent_ptr<History>;
+    using elem_type = Version::ptr;
 
-    list<elem_type> chain;
+    NVList<elem_type> chain;
 
     // Synchronizes access to this history
     // Reset on restart!
     pmdk::mutex mutex;
 
-    history()
+    History()
         : chain{}
         , mutex{}
     {}

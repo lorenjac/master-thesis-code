@@ -20,10 +20,10 @@ Store::Store(pool_type& pop)
     init();
 }
 
-transaction::ptr Store::begin()
+Transaction::ptr Store::begin()
 {
     // Create new transaction with current timestamp
-    auto tx = std::make_shared<transaction>(
+    auto tx = std::make_shared<Transaction>(
         idCounter.fetch_add(TS_DELTA),
         timestampCounter.fetch_add(TS_DELTA)
     );
@@ -41,7 +41,7 @@ transaction::ptr Store::begin()
     return tx;
 }
 
-int Store::abort(transaction::ptr tx, int reason)
+int Store::abort(Transaction::ptr tx, int reason)
 {
     // std::cout << "Store::abort(tx{id=" << tx->getId() << "}";
     // std::cout << ", reason=" << reason << "):" << '\n';
@@ -54,7 +54,7 @@ int Store::abort(transaction::ptr tx, int reason)
     // This must be done atomically because operations of concurrent
     // transactions might be querying the state of tx (if they
     // found its id in a version they want to read or write).
-    tx->getStatus().store(transaction::FAILED);
+    tx->getStatus().store(Transaction::FAILED);
 
     // Undo all changes carried out by tx
     rollback(tx);
@@ -65,7 +65,7 @@ int Store::abort(transaction::ptr tx, int reason)
     return reason;
 }
 
-int Store::commit(transaction::ptr tx)
+int Store::commit(Transaction::ptr tx)
 {
     // std::cout << "Store::commit(tx{id=" << tx->getId() << "}):" << '\n';
 
@@ -87,7 +87,7 @@ int Store::commit(transaction::ptr tx)
     // This must be done atomically because operations of concurrent
     // transactions might be querying the state of tx (e.g. if they
     // found its id in a version they want to read or write).
-    tx->getStatus().store(transaction::COMMITTED);
+    tx->getStatus().store(Transaction::COMMITTED);
 
     // Propagate end timestamp of tx to end/begin fields of original/new versions
     finalize(tx);
@@ -99,7 +99,7 @@ int Store::commit(transaction::ptr tx)
     return OK;
 }
 
-int Store::read(transaction::ptr tx, const key_type& key, mapped_type& result)
+int Store::read(Transaction::ptr tx, const key_type& key, mapped_type& result)
 {
     // std::cout << "Store::read(tx{id=" << tx->getId() << "}):" << '\n';
 
@@ -109,7 +109,7 @@ int Store::read(transaction::ptr tx, const key_type& key, mapped_type& result)
 
     // Look up data item. Abort if key does not exist.
     index_mutex.lock();
-    history::ptr history;
+    History::ptr history;
     auto status = index->get(key, history);
     index_mutex.unlock();
     if (!status) {
@@ -135,7 +135,7 @@ int Store::read(transaction::ptr tx, const key_type& key, mapped_type& result)
     return OK;
 }
 
-int Store::write(transaction::ptr tx, const key_type& key, const mapped_type& value)
+int Store::write(Transaction::ptr tx, const key_type& key, const mapped_type& value)
 {
     // std::cout << "Store::write(tx{id=" << tx->getId() << "}):" << '\n';
 
@@ -155,8 +155,8 @@ int Store::write(transaction::ptr tx, const key_type& key, const mapped_type& va
         // The version affected by this change was 'removed' earlier in this
         // transaction so we change the modification from removal to update.
         // Updates remain updates, as do inserts.
-        if (mod.code == transaction::Mod::Kind::Remove) {
-            mod.code = transaction::Mod::Kind::Update;
+        if (mod.code == Transaction::Mod::Kind::Remove) {
+            mod.code = Transaction::Mod::Kind::Update;
         }
         return OK;
     }
@@ -164,7 +164,7 @@ int Store::write(transaction::ptr tx, const key_type& key, const mapped_type& va
     // std::cout << "write(): item not in change set" << std::endl;
 
     index_mutex.lock();
-    history::ptr history;
+    History::ptr history;
     index->get(key, history);
     index_mutex.unlock();
 
@@ -172,7 +172,7 @@ int Store::write(transaction::ptr tx, const key_type& key, const mapped_type& va
         return insert(tx, key, value);
 
     history->mutex.lock();
-    version::ptr candidate = getWritableSnapshot(history, tx);
+    Version::ptr candidate = getWritableSnapshot(history, tx);
     if (!candidate) {
         auto hasValidVersions = hasValidSnapshots(history);
         history->mutex.unlock();
@@ -192,8 +192,8 @@ int Store::write(transaction::ptr tx, const key_type& key, const mapped_type& va
     history->mutex.unlock();
 
     // Update changeset of tx
-    tx->getChangeSet().emplace(key, transaction::Mod{
-        transaction::Mod::Kind::Update,
+    tx->getChangeSet().emplace(key, Transaction::Mod{
+        Transaction::Mod::Kind::Update,
         candidate,
         value,
         nullptr
@@ -201,7 +201,7 @@ int Store::write(transaction::ptr tx, const key_type& key, const mapped_type& va
     return OK;
 }
 
-int Store::drop(transaction::ptr tx, const key_type& key)
+int Store::drop(Transaction::ptr tx, const key_type& key)
 {
     // std::cout << "Store::drop(tx{id=" << tx->getId() << "}):" << '\n';
 
@@ -214,12 +214,12 @@ int Store::drop(transaction::ptr tx, const key_type& key)
     auto changeIter = changeSet.find(key);
     if (changeIter != changeSet.end()) {
         auto& mod = changeIter->second;
-        if (mod.code == transaction::Mod::Kind::Update) {
+        if (mod.code == Transaction::Mod::Kind::Update) {
             // The version affected by this change was 'updated' earlier in this
             // transaction so we change the modification from update to removal.
-            mod.code = transaction::Mod::Kind::Remove;
+            mod.code = Transaction::Mod::Kind::Remove;
         }
-        else if (mod.code == transaction::Mod::Kind::Insert) {
+        else if (mod.code == Transaction::Mod::Kind::Insert) {
             // The version affected by this change was 'inserted' earlier in
             // this transaction so we simply discard the change altogether.
             changeSet.erase(changeIter);
@@ -231,7 +231,7 @@ int Store::drop(transaction::ptr tx, const key_type& key)
                 mod.v_origin->end.store(TS_INFINITY);
             });
         }
-        else if (mod.code == transaction::Mod::Kind::Remove) {
+        else if (mod.code == Transaction::Mod::Kind::Remove) {
             // The version affected by this change was 'removed' earlier in
             // this transaction already, so we have fail here
             return VALUE_NOT_FOUND;
@@ -240,7 +240,7 @@ int Store::drop(transaction::ptr tx, const key_type& key)
     }
 
     // Look up history of data item. Abort if key does not exist.
-    history::ptr history;
+    History::ptr history;
     index_mutex.lock();
     auto status = index->get(key, history);
     index_mutex.unlock();
@@ -262,8 +262,8 @@ int Store::drop(transaction::ptr tx, const key_type& key)
     });
     history->mutex.unlock();
 
-    tx->getChangeSet().emplace(key, transaction::Mod{
-        transaction::Mod::Kind::Remove,
+    tx->getChangeSet().emplace(key, Transaction::Mod{
+        Transaction::Mod::Kind::Remove,
         candidate,
         "",
         nullptr
@@ -331,7 +331,7 @@ void Store::init()
                 // Purge left history empty, so we should remove it from
                 // the index and deallocate it
                 it = index->erase(it, pop);
-                pmdk::delete_persistent<history>(hist);
+                pmdk::delete_persistent<History>(hist);
             }
             else {
                 // Release the lock on the current history, as it may have become
@@ -348,7 +348,7 @@ void Store::init()
     timestampCounter.fetch_add(TS_DELTA);
 }
 
-void Store::purgeHistory(history::ptr& history)
+void Store::purgeHistory(History::ptr& history)
 {
     const auto first_stamp = timestampCounter.load();
     auto& chain = history->chain;
@@ -360,7 +360,7 @@ void Store::purgeHistory(history::ptr& history)
             // never committed or failed to finalize timestamps.
             // Therefore, we have to delete V.
             it = chain.erase(it, pop);
-            pmdk::delete_persistent<version>(v);
+            pmdk::delete_persistent<Version>(v);
         }
         else if (v->end == TS_INFINITY) {
             // V was valid before restart. Make it look like it was
@@ -381,15 +381,15 @@ void Store::purgeHistory(history::ptr& history)
             // V was invalidated and the associated transaction
             // has committed so we do not need V anymore.
             it = chain.erase(it, pop);
-            pmdk::delete_persistent<version>(v);
+            pmdk::delete_persistent<Version>(v);
         }
     }
 }
 
-int Store::insert(transaction::ptr tx, const key_type& key, const mapped_type& value)
+int Store::insert(Transaction::ptr tx, const key_type& key, const mapped_type& value)
 {
-    tx->getChangeSet().emplace(key, transaction::Mod{
-        transaction::Mod::Kind::Insert,
+    tx->getChangeSet().emplace(key, Transaction::Mod{
+        Transaction::Mod::Kind::Insert,
         nullptr,
         value,
         nullptr
@@ -397,7 +397,7 @@ int Store::insert(transaction::ptr tx, const key_type& key, const mapped_type& v
     return OK;
 }
 
-version::ptr Store::getWritableSnapshot(history::ptr& history, transaction::ptr tx)
+Version::ptr Store::getWritableSnapshot(History::ptr& history, Transaction::ptr tx)
 {
     // std::cout << "Store::getWritableSnapshot(tx{id=" << tx->getId() << "}):" << '\n';
 
@@ -408,7 +408,7 @@ version::ptr Store::getWritableSnapshot(history::ptr& history, transaction::ptr 
     return nullptr;
 }
 
-version::ptr Store::getReadableSnapshot(history::ptr& history, transaction::ptr tx)
+Version::ptr Store::getReadableSnapshot(History::ptr& history, Transaction::ptr tx)
 {
     // std::cout << "Store::getReadableSnapshot(tx{id=" << tx->getId() << "}):" << '\n';
 
@@ -419,7 +419,7 @@ version::ptr Store::getReadableSnapshot(history::ptr& history, transaction::ptr 
     return nullptr;
 }
 
-bool Store::isReadable(version::ptr& v, transaction::ptr tx)
+bool Store::isReadable(Version::ptr& v, Transaction::ptr tx)
 {
     // Read begin/end fields
     auto v_begin = v->begin;
@@ -433,12 +433,12 @@ bool Store::isReadable(version::ptr& v, transaction::ptr tx)
     // check if that happened before tx started.
     if (isTransactionId(v_begin)) {
         // Lookup the specified transaction
-        transaction::ptr other_tx;
+        Transaction::ptr other_tx;
         tx_tab.find(v_begin, other_tx);
 
         // V (written by other_tx) is only visible to tx if other_tx
         // has committed before tx started.
-        if (other_tx->getStatus().load() != transaction::COMMITTED ||
+        if (other_tx->getStatus().load() != Transaction::COMMITTED ||
                 other_tx->getEnd() > tx->getBegin())
             return false;
     }
@@ -454,14 +454,14 @@ bool Store::isReadable(version::ptr& v, transaction::ptr tx)
     if (isTransactionId(v_end)) {
 
         // Lookup the specified transaction
-        transaction::ptr other_tx;
+        Transaction::ptr other_tx;
         tx_tab.find(v_end, other_tx);
 
         // V (possibly invalidated by other_tx) is only visible to tx
         // if other_tx is active, has aborted or has committed after
         // tx started. If other_tx committed before tx then V was
         // invalid before tx started and is thus invisible.
-        if (other_tx->getStatus().load() == transaction::COMMITTED &&
+        if (other_tx->getStatus().load() == Transaction::COMMITTED &&
                 other_tx->getEnd() < tx->getBegin())
             return false;
     }
@@ -480,7 +480,7 @@ bool Store::isReadable(version::ptr& v, transaction::ptr tx)
     return true;
 }
 
-bool Store::isWritable(version::ptr& v, transaction::ptr tx)
+bool Store::isWritable(Version::ptr& v, Transaction::ptr tx)
 {
     auto v_begin = v->begin;
     auto v_end = v->end.load();
@@ -493,14 +493,14 @@ bool Store::isWritable(version::ptr& v, transaction::ptr tx)
     // check if that happened before tx started.
     if (isTransactionId(v_begin)) {
         // Lookup the specified transaction
-        transaction::ptr other_tx;
+        Transaction::ptr other_tx;
         tx_tab.find(v_begin, other_tx);
 
         // V (written by other_tx) is only visible to tx if other_tx
         // has committed before tx started.
         //
         // Note: This is the same assertion as is used for reading.
-        if (other_tx->getStatus().load() != transaction::COMMITTED ||
+        if (other_tx->getStatus().load() != Transaction::COMMITTED ||
                 other_tx->getEnd() > tx->getBegin())
             return false;
     }
@@ -522,11 +522,11 @@ bool Store::isWritable(version::ptr& v, transaction::ptr tx)
     // In that case we have to check its timestamp for invalidation.
     if (isTransactionId(v_end)) {
         // Lookup the specified transaction
-        transaction::ptr other_tx;
+        Transaction::ptr other_tx;
         tx_tab.find(v_end, other_tx);
 
         // V is only visible to tx if other_tx has aborted.
-        if (other_tx->getStatus().load() != transaction::FAILED)
+        if (other_tx->getStatus().load() != Transaction::FAILED)
             return false;
     }
     else if (v_end != TS_INFINITY) {
@@ -543,7 +543,7 @@ bool Store::isWritable(version::ptr& v, transaction::ptr tx)
     return true;
 }
 
-bool Store::persist(transaction::ptr tx)
+bool Store::persist(Transaction::ptr tx)
 {
     // std::cout << "Store::persist(tx{id=" << tx->getId() << "}):" << '\n';
 
@@ -552,11 +552,11 @@ bool Store::persist(transaction::ptr tx)
     pmdk::transaction::exec_tx(pop, [&,this](){
         for (auto& [key, change] : tx->getChangeSet()) {
             // Do nothing for removals
-            if (change.code == transaction::Mod::Kind::Remove)
+            if (change.code == Transaction::Mod::Kind::Remove)
                 continue;
 
             // Create new version
-            auto new_version = pmdk::make_persistent<version>();
+            auto new_version = pmdk::make_persistent<Version>();
             new_version->begin = tid;
             new_version->data = change.delta;
             new_version->end = TS_INFINITY;
@@ -565,15 +565,15 @@ bool Store::persist(transaction::ptr tx)
             change.v_new = new_version;
 
             // Get history of version (create if needed)
-            history::ptr history;
-            if (change.code == transaction::Mod::Kind::Update) {
+            History::ptr history;
+            if (change.code == Transaction::Mod::Kind::Update) {
                 index_mutex.lock();
                 index->get(key, history);
                 index_mutex.unlock();
             }
-            else if (change.code == transaction::Mod::Kind::Insert) {
+            else if (change.code == Transaction::Mod::Kind::Insert) {
 
-                history::ptr exist_hist;
+                History::ptr exist_hist;
 
                 // Handle ww-conflict when installing insertions. If another
                 // transaction managed to insert a history for the same key
@@ -594,11 +594,11 @@ bool Store::persist(transaction::ptr tx)
                     }
                 }
                 else {
-                    history = pmdk::make_persistent<detail::history>();
+                    history = pmdk::make_persistent<History>();
                     bool insertSuccess = index->put(key, history, pop);
                     if (!insertSuccess) {
                         std::cout << "persist(): write/write conflict!\n";
-                        pmdk::delete_persistent<detail::history>(history);
+                        pmdk::delete_persistent<History>(history);
                         success = false;
                     }
                 }
@@ -606,7 +606,7 @@ bool Store::persist(transaction::ptr tx)
             }
 
             if (!success) {
-                pmdk::delete_persistent<version>(new_version);
+                pmdk::delete_persistent<Version>(new_version);
                 change.v_new = nullptr;
                 return;
             }
@@ -620,7 +620,7 @@ bool Store::persist(transaction::ptr tx)
     return success;
 }
 
-void Store::finalize(transaction::ptr tx)
+void Store::finalize(Transaction::ptr tx)
 {
     // std::cout << "Store::finalize(tx{id=" << tx->getId() << "}):" << '\n';
 
@@ -638,11 +638,11 @@ void Store::finalize(transaction::ptr tx)
             // are neutral and all other transactions will always see valid
             // data (timestamps or TIDs).
             switch (change.code) {
-            case transaction::Mod::Kind::Insert:
+            case Transaction::Mod::Kind::Insert:
                 change.v_new->begin = tx_end_stamp;
                 break;
 
-            case transaction::Mod::Kind::Update:
+            case Transaction::Mod::Kind::Update:
                 change.v_new->begin = tx_end_stamp;
 
                 // Note: No test-and-set is required here because, as opposed
@@ -655,7 +655,7 @@ void Store::finalize(transaction::ptr tx)
                 change.v_origin->end.store(tx_end_stamp);
                 break;
 
-            case transaction::Mod::Kind::Remove:
+            case Transaction::Mod::Kind::Remove:
                 // See note above.
                 change.v_origin->end.store(tx_end_stamp);
                 break;
@@ -664,7 +664,7 @@ void Store::finalize(transaction::ptr tx)
     });
 }
 
-void Store::rollback(transaction::ptr tx)
+void Store::rollback(Transaction::ptr tx)
 {
     // std::cout << "Store::rollback(tx{id=" << tx->getId() << "}):" << '\n';
 
@@ -678,7 +678,7 @@ void Store::rollback(transaction::ptr tx)
             (void)key;
 
             switch (change.code) {
-            case transaction::Mod::Kind::Insert:
+            case Transaction::Mod::Kind::Insert:
                 // Access to version/history is not synchronized here.
                 // As a result, other transactions scanning this version may
                 // see inconsistent timestamps. However, our tx has not
@@ -690,7 +690,7 @@ void Store::rollback(transaction::ptr tx)
                 }
                 break;
 
-            case transaction::Mod::Kind::Update:
+            case Transaction::Mod::Kind::Update:
                 // Access to version/history is not synchronized here.
                 // As a result, other transactions scanning this version may
                 // see inconsistent timestamps. However, our tx has not
@@ -715,7 +715,7 @@ void Store::rollback(transaction::ptr tx)
                 tid = tx->getId(); // recover from side effect of CAS above
                 break;
 
-            case transaction::Mod::Kind::Remove:
+            case Transaction::Mod::Kind::Remove:
                 // Access to version/history is not synchronized here.
                 // As a result, other transactions (seeing our tx has failed)
                 // could try to acquire ownership for the current version.
@@ -734,13 +734,13 @@ void Store::rollback(transaction::ptr tx)
     });
 } // end function rollback
 
-bool Store::isValidTransaction(const transaction::ptr tx)
+bool Store::isValidTransaction(const Transaction::ptr tx)
 {
     return (tx && tx_tab.contains(tx->getId()) &&
-            tx->getStatus().load() == transaction::ACTIVE);
+            tx->getStatus().load() == Transaction::ACTIVE);
 }
 
-bool Store::hasValidSnapshots(const history::ptr& hist)
+bool Store::hasValidSnapshots(const History::ptr& hist)
 {
     for (auto& v : hist->chain) {
         auto v_end = v->end.load();
