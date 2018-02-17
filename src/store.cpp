@@ -77,11 +77,12 @@ int Store::commit(Transaction::ptr tx)
     tx->setEnd(timestampCounter.fetch_add(TS_DELTA));
 
     auto status = validate(tx);
-    if (status)
+    if (status != OK)
         return abort(tx, status);
 
-    if (!persist(tx))
-        return abort(tx, WRITE_CONFLICT);
+    status = persist(tx);
+    if (status != OK)
+        return abort(tx, status);
 
     // Mark tx as committed.
     // This must be done atomically because operations of concurrent
@@ -591,11 +592,11 @@ int Store::validate(Transaction::ptr tx)
     return OK;
 }
 
-bool Store::persist(Transaction::ptr tx)
+int Store::persist(Transaction::ptr tx)
 {
     // std::cout << "Store::persist(tx{id=" << tx->getId() << "}):" << '\n';
 
-    bool success = true;
+    int status = OK;
     const auto tid = tx->getId();
     pmdk::transaction::exec_tx(pop, [&,this](){
         for (auto& [key, change] : tx->getChangeSet()) {
@@ -638,7 +639,7 @@ bool Store::persist(Transaction::ptr tx)
                     }
                     else {
                         std::cout << "persist(): write/write conflict!\n";
-                        success = false;
+                        status = WW_CONFLICT;
                     }
                 }
                 else {
@@ -647,13 +648,13 @@ bool Store::persist(Transaction::ptr tx)
                     if (!insertSuccess) {
                         std::cout << "persist(): write/write conflict!\n";
                         pmdk::delete_persistent<History>(history);
-                        success = false;
+                        status = WW_CONFLICT;
                     }
                 }
                 index_mutex.unlock();
             }
 
-            if (!success) {
+            if (status != OK) {
                 pmdk::delete_persistent<Version>(new_version);
                 change.v_new = nullptr;
                 return;
@@ -665,7 +666,7 @@ bool Store::persist(Transaction::ptr tx)
             history->mutex.unlock();
         }
     });
-    return success;
+    return status;
 }
 
 void Store::finalize(Transaction::ptr tx)

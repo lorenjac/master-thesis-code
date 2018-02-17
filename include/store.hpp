@@ -44,7 +44,7 @@ public:
         INVALID_TX,
         KEY_EXISTS,
         RW_CONFLICT,
-        WRITE_CONFLICT,
+        WW_CONFLICT,
         VALUE_NOT_FOUND = 404
     };
 
@@ -122,7 +122,7 @@ private:
     int validate(Transaction::ptr tx);
     void rollback(Transaction::ptr tx);
     void finalize(Transaction::ptr tx);
-    bool persist(Transaction::ptr tx);
+    int persist(Transaction::ptr tx);
 
     bool isValidTransaction(const Transaction::ptr tx);
 
