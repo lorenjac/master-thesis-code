@@ -43,6 +43,7 @@ public:
         OK = 0,
         INVALID_TX,
         KEY_EXISTS,
+        RW_CONFLICT,
         WRITE_CONFLICT,
         VALUE_NOT_FOUND = 404
     };
@@ -118,7 +119,7 @@ private:
     Version::ptr getReadableSnapshot(History::ptr& history, Transaction::ptr tx);
     bool isWritable(Version::ptr& v, Transaction::ptr tx);
     bool isReadable(Version::ptr& v, Transaction::ptr tx);
-    bool validate(Transaction::ptr tx);
+    int validate(Transaction::ptr tx);
     void rollback(Transaction::ptr tx);
     void finalize(Transaction::ptr tx);
     bool persist(Transaction::ptr tx);
@@ -135,6 +136,7 @@ private:
      * Tests whether the given value is a transaction id.
      */
     inline bool isTransactionId(const stamp_type data);
+    Transaction::status_code getTransactionStatus(const id_type id);
 };
 
 bool init(Store::pool_type& pop, std::string file, size_type pool_size);

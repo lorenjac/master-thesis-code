@@ -76,9 +76,9 @@ int Store::commit(Transaction::ptr tx)
     // Set tx end timestamp
     tx->setEnd(timestampCounter.fetch_add(TS_DELTA));
 
-    // Note: This is where validation would take place (not required for snapshot isolation)
-    // if (!validate(tx))
-    //     return abort(tx, 0xDEADBEEF);
+    auto status = validate(tx);
+    if (status)
+        return abort(tx, status);
 
     if (!persist(tx))
         return abort(tx, WRITE_CONFLICT);
@@ -129,6 +129,9 @@ int Store::read(Transaction::ptr tx, const key_type& key, mapped_type& result)
     // std::cout << "begin=" << candidate->begin;
     // std::cout << ", end=" << candidate->end;
     // std::cout << ", data=" << candidate->data << "}\n";
+
+    // Add this version to the read set so we can detect R/W conflicts later
+    tx->getReadSet().push_back(candidate);
 
     // Retrieve data from selected version
     result = candidate->data.to_std_string();
@@ -543,6 +546,51 @@ bool Store::isWritable(Version::ptr& v, Transaction::ptr tx)
     return true;
 }
 
+int Store::validate(Transaction::ptr tx)
+{
+    std::cout << "validate(tid=" << tx->getId() << ")\n";
+
+    // Succeed if tx has not written anything.
+    // It appears that only updaters with read-write conflicts must be stopped.
+    // The best known anomalies of SI are write skew and non-serializable
+    // read-only transactions. In the absence of rw-conflicting updaters,
+    // both anomalies are precluded. Read-onlys are then serializable
+    // because we do not need to serialize conflicting updaters.
+    // Therefore, we do not have to validate for read-onlys.
+    if (tx->getChangeSet().empty())
+        return OK;
+
+    const auto tid = tx->getId();
+
+    // Test for each read version whether it is still valid
+    for (const auto& v : tx->getReadSet()) {
+
+        std::cout << "begin=" << v->begin;
+        std::cout << ", end=" << v->end;
+        std::cout << ", data=" << v->data.to_std_string() << "\n";
+
+        auto vEnd = v->end.load();
+        if (isTransactionId(vEnd)) {
+            // if (getTransactionStatus(vEnd) == Transaction::COMMITTED) {
+            if (vEnd != tid && getTransactionStatus(vEnd) != Transaction::FAILED) {
+                // Version is currently tagged by transaction that has already
+                // committed. Therefore, this version is implicitly invalid
+                // which causes a read-write conflict.
+                std::cout << "R/W conflict\n";
+                return RW_CONFLICT;
+            }
+        }
+        else if (vEnd != TS_INFINITY) {
+            // Version is not tagged and has a end timestamp less than infinity.
+            // Therefore, this version is explicitly invalid which causes a
+            // read-write conflict.
+            std::cout << "R/W conflict\n";
+            return RW_CONFLICT;
+        }
+    }
+    return OK;
+}
+
 bool Store::persist(Transaction::ptr tx)
 {
     // std::cout << "Store::persist(tx{id=" << tx->getId() << "}):" << '\n';
@@ -754,6 +802,20 @@ bool Store::isTransactionId(const stamp_type data)
 {
     return data & 1;
 }
+
+Transaction::status_code Store::getTransactionStatus(const id_type id)
+{
+    Transaction::ptr tx;
+    tx_tab.find(id, tx);
+    if (!tx)
+        throw std::logic_error("no transaction for id");
+
+    return tx->getStatus().load();
+}
+
+// ############################################################################
+// FREE FUNCTIONS
+// ############################################################################
 
 bool init(Store::pool_type& pop, std::string file, size_type pool_size)
 {

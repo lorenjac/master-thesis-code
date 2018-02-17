@@ -18,9 +18,6 @@ void launch(midas::pop_type& pop)
     {
         auto tx = store.begin();
         store.write(tx, "sheep", "0");
-        store.commit(tx);
-
-        tx = store.begin();
         store.write(tx, "wolves", "0");
         store.commit(tx);
     }
@@ -80,7 +77,7 @@ void launch(midas::pop_type& pop)
         store.commit(reader);
 
         std::cout << "num sheep : " << numSheep << std::endl;
-        std::cout << "num wolves: " << numSheep << std::endl;
+        std::cout << "num wolves: " << numWolves << std::endl;
     }
 
 } // end function launch
