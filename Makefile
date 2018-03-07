@@ -1,7 +1,8 @@
 # Compiler Flags
 
 CC=g++
-CFLAGS=-std=c++1z -Wall -g
+CFLAGS=-std=c++1z -Wall -O2
+#CFLAGS=-std=c++1z -Wall -g
 
 # Input
 
@@ -9,7 +10,8 @@ INCLUDE=-Iinclude -Ilib/libcuckoo -Ilib/pmdk/src/include
 SRC_DIR=src
 TEST_DIR=test
 
-LIB_DIR=-Llib/pmdk/src/debug/
+#LIB_DIR=-Llib/pmdk/src/debug/
+LIB_DIR=-Llib/pmdk/src/nondebug/
 ST_LIBS=-lpmemobj -lpmem
 DY_LIBS=-ldl -lstdc++fs -pthread
 
@@ -22,6 +24,9 @@ BIN_DIR=bin
 # Targets
 
 all : main
+
+lib : makeDir base
+	ar rcs $(BIN_DIR)/libmidas.a $(BIN_DIR)/*.o
 
 main : makeDir
 	$(CC) $(CFLAGS) $(INCLUDE) $(SRC_DIR)/*.cpp $(LDFLAGS) -o $(BIN_DIR)/$@
