@@ -549,7 +549,7 @@ bool Store::isWritable(Version::ptr& v, Transaction::ptr tx)
 
 int Store::validate(Transaction::ptr tx)
 {
-    std::cout << "Store::validate(tid=" << tx->getId() << ")\n";
+    // std::cout << "Store::validate(tid=" << tx->getId() << ")\n";
 
     // Succeed if tx has not written anything.
     // It appears that only updaters with read-write conflicts must be stopped.
@@ -594,7 +594,7 @@ int Store::validate(Transaction::ptr tx)
 
 int Store::persist(Transaction::ptr tx)
 {
-    std::cout << "Store::persist(tid=" << tx->getId() << "):" << '\n';
+    // std::cout << "Store::persist(tid=" << tx->getId() << "):" << '\n';
 
     int status = OK;
     const auto tid = tx->getId();
@@ -671,7 +671,7 @@ int Store::persist(Transaction::ptr tx)
 
 void Store::finalize(Transaction::ptr tx)
 {
-    std::cout << "Store::finalize(tid=" << tx->getId() << "):" << '\n';
+    // std::cout << "Store::finalize(tid=" << tx->getId() << "):" << '\n';
 
     const auto tx_end_stamp = tx->getEnd();
     pmdk::transaction::exec_tx(pop, [&,this](){
