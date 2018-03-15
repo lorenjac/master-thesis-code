@@ -3,6 +3,8 @@
 #include <experimental/filesystem>  // std::exists
 #include <memory> // std::make_shared
 
+// #include <sstream>
+
 namespace midas {
 namespace detail {
 
@@ -278,24 +280,24 @@ int Store::drop(Transaction::ptr tx, const key_type& key)
 void Store::print()
 {
     const auto end = index->end();
-    std::cout << "--" << std::endl;
-    std::cout << "buckets: " << index->buckets() << std::endl;
-    std::cout << "size: " << index->size() << std::endl;
-    std::cout << "--" << std::endl;
+    std::cerr << "--" << std::endl;
+    std::cerr << "buckets: " << index->buckets() << std::endl;
+    std::cerr << "size: " << index->size() << std::endl;
+    std::cerr << "--" << std::endl;
     for (auto it = index->begin(); it != end; ++it) {
-        std::cout << "key: "  << (*it)->key.get_ro().to_std_string() << std::endl;
+        std::cerr << "key: "  << (*it)->key.get_ro().to_std_string() << std::endl;
 
         size_type i = 0;
         auto history = (*it)->value;
         for (auto v : history->chain) {
             if (i++ != 0)
-                std::cout << "  --" << std::endl;
-            std::cout << "  data : " << v->data.to_std_string() << std::endl;
-            std::cout << "  began: " << v->begin << std::endl;
-            std::cout << "  ended: " << v->end<< std::endl;
+                std::cerr << "  --" << std::endl;
+            std::cerr << "  data : " << v->data.to_std_string() << std::endl;
+            std::cerr << "  began: " << v->begin << std::endl;
+            std::cerr << "  ended: " << v->end<< std::endl;
         }
         if (i != 0)
-            std::cout << std::endl;
+            std::cerr << std::endl;
     }
 }
 
@@ -563,6 +565,8 @@ int Store::validate(Transaction::ptr tx)
 
     const auto tid = tx->getId();
 
+    // std::stringstream ss;
+
     // Test for each read version whether it is still valid
     for (const auto& v : tx->getReadSet()) {
 
@@ -578,6 +582,16 @@ int Store::validate(Transaction::ptr tx)
                 // committed. Therefore, this version is implicitly invalid
                 // which causes a read-write conflict.
                 // std::cout << "R/W conflict\n";
+                // ss << "warning: r/w conflict detected! version is captured.\n";
+                // ss << "\ttid = " << tid << '\n';
+                // ss << "\tbeg = " << tx->getBegin() << '\n';
+                // ss << "\tend = " << tx->getEnd() << '\n';
+                // ss << "\tver = ";
+                // for (unsigned i=0; i<v->data.size; ++i)
+                //     ss << v->data[i];
+                // ss << '\n';
+                // std::cout << ss.str();
+                // ss.str("");
                 return RW_CONFLICT;
             }
         }
@@ -586,6 +600,16 @@ int Store::validate(Transaction::ptr tx)
             // Therefore, this version is explicitly invalid which causes a
             // read-write conflict.
             // std::cout << "R/W conflict\n";
+            // ss << "warning: r/w conflict detected! version is outdated.\n";
+            // ss << "\ttid = " << tid << '\n';
+            // ss << "\tbeg = " << tx->getBegin() << '\n';
+            // ss << "\tend = " << tx->getEnd() << '\n';
+            // ss << "\tver = ";
+            // for (unsigned i=0; i<v->data.size; ++i)
+            //     ss << v->data[i];
+            // ss << '\n';
+            // std::cout << ss.str();
+            // ss.str("");
             return RW_CONFLICT;
         }
     }
