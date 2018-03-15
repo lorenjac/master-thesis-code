@@ -42,7 +42,7 @@ public:
     enum {
         OK = 0,
         INVALID_TX,
-        KEY_EXISTS,
+        // KEY_EXISTS,
         RW_CONFLICT,
         WW_CONFLICT,
         VALUE_NOT_FOUND = 404

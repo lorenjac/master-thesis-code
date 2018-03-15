@@ -566,9 +566,9 @@ int Store::validate(Transaction::ptr tx)
     // Test for each read version whether it is still valid
     for (const auto& v : tx->getReadSet()) {
 
-        std::cout << "begin=" << v->begin;
-        std::cout << ", end=" << v->end;
-        std::cout << ", data=" << v->data.to_std_string() << "\n";
+        // std::cout << "begin=" << v->begin;
+        // std::cout << ", end=" << v->end;
+        // std::cout << ", data=" << v->data.to_std_string() << "\n";
 
         auto vEnd = v->end.load();
         if (isTransactionId(vEnd)) {
@@ -577,7 +577,7 @@ int Store::validate(Transaction::ptr tx)
                 // Version is currently tagged by transaction that has already
                 // committed. Therefore, this version is implicitly invalid
                 // which causes a read-write conflict.
-                std::cout << "R/W conflict\n";
+                // std::cout << "R/W conflict\n";
                 return RW_CONFLICT;
             }
         }
@@ -585,7 +585,7 @@ int Store::validate(Transaction::ptr tx)
             // Version is not tagged and has a end timestamp less than infinity.
             // Therefore, this version is explicitly invalid which causes a
             // read-write conflict.
-            std::cout << "R/W conflict\n";
+            // std::cout << "R/W conflict\n";
             return RW_CONFLICT;
         }
     }
@@ -638,7 +638,7 @@ int Store::persist(Transaction::ptr tx)
                         history = exist_hist;
                     }
                     else {
-                        std::cout << "persist(): write/write conflict!\n";
+                        // std::cout << "persist(): write/write conflict!\n";
                         status = WW_CONFLICT;
                     }
                 }
@@ -646,7 +646,7 @@ int Store::persist(Transaction::ptr tx)
                     history = pmdk::make_persistent<History>();
                     bool insertSuccess = index->put(key, history, pop);
                     if (!insertSuccess) {
-                        std::cout << "persist(): write/write conflict!\n";
+                        // std::cout << "persist(): write/write conflict!\n";
                         pmdk::delete_persistent<History>(history);
                         status = WW_CONFLICT;
                     }
