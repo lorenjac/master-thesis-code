@@ -1,4 +1,4 @@
-# A Persistent Hash Table
+# Midas - An NVRAM-Resident Key-Value Store with Serializable Transactions
 
 ## Prequisistes
 
@@ -23,24 +23,5 @@ statically.
 
 ## Build
 
-Simply run `make` (it will create a bin folder automatically)
-
-```
-make
-```
-
-## Running
-
-If you are working in an NFS environment or inside a folder shared with a
-virtual machine, you may experience crashes as the pmdk library tries to acquire
-file locks which seems to cause trouble on some systems. Therefore it is
-**strongly recommended** that you only use local folders (e.g. `/tmp`) or stay
-within the virtual machine filesystem at all times, respectively. Currently,
-The main executable is hard-coded to use `/tmp/nvm`. Use or change at will.
-
-The main executable does not require arguments. Providing no arguments invokes
-a basic interactive mode, where single instructions can be run as transactions. There are commands for writing, reading, and deleting items. For help provide `h` or `help`.
-
-```
-./bin/<program>
-```
+Simply run `make` (it will create a bin folder automatically). In order to build
+static libraries, run `make lib`.
